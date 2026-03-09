@@ -100,8 +100,7 @@ func agentCreateCmd() *cobra.Command {
 
 			// Write agent.json
 			agentCfg := config.AgentFileConfig{
-				Model:    "gpt-4o",
-				Channels: []string{},
+				Model: "gpt-4o",
 			}
 			data, _ := json.MarshalIndent(agentCfg, "", "  ")
 			if err := os.WriteFile(filepath.Join(agentDir, "agent.json"), data, 0o644); err != nil {

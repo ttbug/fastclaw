@@ -10,7 +10,7 @@ import (
 
 // Manager manages all channel instances and routes outbound messages.
 type Manager struct {
-	channels map[string]Channel
+	channels map[string]Channel // key: "channel:accountID"
 	bus      *bus.MessageBus
 }
 
@@ -22,9 +22,10 @@ func NewManager(mb *bus.MessageBus) *Manager {
 	}
 }
 
-// Register adds a channel to the manager.
+// Register adds a channel to the manager keyed by channel:accountID.
 func (m *Manager) Register(ch Channel) {
-	m.channels[ch.Name()] = ch
+	key := channelKey(ch.Name(), ch.AccountID())
+	m.channels[key] = ch
 }
 
 // Start launches all channels and the outbound message router.
@@ -39,15 +40,15 @@ func (m *Manager) Start(ctx context.Context) {
 	}()
 
 	// Start each channel
-	for name, ch := range m.channels {
+	for key, ch := range m.channels {
 		wg.Add(1)
-		go func(n string, c Channel) {
+		go func(k string, c Channel) {
 			defer wg.Done()
-			slog.Info("starting channel", "name", n)
+			slog.Info("starting channel", "key", k)
 			if err := c.Start(ctx); err != nil {
-				slog.Error("channel stopped with error", "name", n, "error", err)
+				slog.Error("channel stopped with error", "key", k, "error", err)
 			}
-		}(name, ch)
+		}(key, ch)
 	}
 
 	wg.Wait()
@@ -59,14 +60,22 @@ func (m *Manager) routeOutbound(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case msg := <-m.bus.Outbound:
-			ch, ok := m.channels[msg.Channel]
+			key := channelKey(msg.Channel, msg.AccountID)
+			ch, ok := m.channels[key]
 			if !ok {
-				slog.Warn("unknown outbound channel", "channel", msg.Channel)
+				slog.Warn("unknown outbound channel", "key", key)
 				continue
 			}
 			if err := ch.Send(msg.ChatID, msg.Text); err != nil {
-				slog.Error("send message failed", "channel", msg.Channel, "error", err)
+				slog.Error("send message failed", "key", key, "error", err)
 			}
 		}
 	}
+}
+
+func channelKey(channel, accountID string) string {
+	if accountID == "" {
+		return channel + ":"
+	}
+	return channel + ":" + accountID
 }

@@ -13,27 +13,33 @@ import (
 
 // Telegram implements the Channel interface for Telegram Bot API.
 type Telegram struct {
-	bot *tgbotapi.BotAPI
-	bus *bus.MessageBus
+	bot       *tgbotapi.BotAPI
+	bus       *bus.MessageBus
+	accountID string
 }
 
-// NewTelegram creates a new Telegram channel.
-func NewTelegram(botToken string, mb *bus.MessageBus) (*Telegram, error) {
+// NewTelegram creates a new Telegram channel instance for the given account.
+func NewTelegram(botToken string, accountID string, mb *bus.MessageBus) (*Telegram, error) {
 	bot, err := tgbotapi.NewBotAPI(botToken)
 	if err != nil {
 		return nil, fmt.Errorf("create telegram bot: %w", err)
 	}
 
-	slog.Info("telegram bot authorized", "username", bot.Self.UserName)
+	slog.Info("telegram bot authorized", "username", bot.Self.UserName, "account", accountID)
 
 	return &Telegram{
-		bot: bot,
-		bus: mb,
+		bot:       bot,
+		bus:       mb,
+		accountID: accountID,
 	}, nil
 }
 
 func (t *Telegram) Name() string {
 	return "telegram"
+}
+
+func (t *Telegram) AccountID() string {
+	return t.accountID
 }
 
 // Start begins long polling for Telegram updates.
@@ -53,17 +59,25 @@ func (t *Telegram) Start(ctx context.Context) error {
 				continue
 			}
 
+			peerKind := "dm"
+			if update.Message.Chat.IsGroup() || update.Message.Chat.IsSuperGroup() {
+				peerKind = "group"
+			}
+
 			slog.Info("telegram message received",
 				"from", update.Message.From.UserName,
 				"chat_id", update.Message.Chat.ID,
-				"text", update.Message.Text,
+				"account", t.accountID,
+				"peer_kind", peerKind,
 			)
 
 			t.bus.Inbound <- bus.InboundMessage{
-				Channel: "telegram",
-				ChatID:  strconv.FormatInt(update.Message.Chat.ID, 10),
-				UserID:  strconv.FormatInt(update.Message.From.ID, 10),
-				Text:    update.Message.Text,
+				Channel:   "telegram",
+				AccountID: t.accountID,
+				ChatID:    strconv.FormatInt(update.Message.Chat.ID, 10),
+				UserID:    strconv.FormatInt(update.Message.From.ID, 10),
+				Text:      update.Message.Text,
+				PeerKind:  peerKind,
 			}
 		}
 	}

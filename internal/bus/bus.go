@@ -2,17 +2,20 @@ package bus
 
 // InboundMessage represents a message received from a channel.
 type InboundMessage struct {
-	Channel string // channel type, e.g. "telegram"
-	ChatID  string // unique chat identifier within the channel
-	UserID  string // user identifier
-	Text    string // message text
+	Channel   string // channel type, e.g. "telegram"
+	AccountID string // account within the channel (e.g. which bot)
+	ChatID    string // unique chat identifier within the channel
+	UserID    string // user identifier
+	Text      string // message text
+	PeerKind  string // "group" or "dm"
 }
 
 // OutboundMessage represents a message to be sent to a channel.
 type OutboundMessage struct {
-	Channel string // target channel type
-	ChatID  string // target chat identifier
-	Text    string // message text
+	Channel   string // target channel type
+	AccountID string // target account within the channel
+	ChatID    string // target chat identifier
+	Text      string // message text
 }
 
 // MessageBus is an async message queue backed by Go channels.

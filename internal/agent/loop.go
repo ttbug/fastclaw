@@ -37,11 +37,11 @@ func NewAgent(rc config.ResolvedAgent, prov provider.Provider, mb *bus.MessageBu
 	skillsSummary := loader.BuildSkillsSummary(skills)
 
 	if len(skills) > 0 {
-		slog.Info("loaded skills", "agent", rc.Name, "count", len(skills))
+		slog.Info("loaded skills", "agent", rc.ID, "count", len(skills))
 	}
 
 	return &Agent{
-		name:              rc.Name,
+		name:              rc.ID,
 		provider:          prov,
 		registry:          registry,
 		sessions:          session.NewManager(rc.Workspace + "/sessions"),

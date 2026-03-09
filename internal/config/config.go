@@ -10,10 +10,10 @@ import (
 
 // Config is the top-level configuration loaded from ~/.fastclaw/config.json.
 type Config struct {
-	Providers map[string]ProviderConfig      `json:"providers"`
-	Defaults  DefaultsConfig                 `json:"defaults"`
-	Agents    map[string]AgentOverrideConfig  `json:"agents,omitempty"`
-	Channels  ChannelsConfig                 `json:"channels"`
+	Providers map[string]ProviderConfig `json:"providers"`
+	Agents    AgentsConfig              `json:"agents"`
+	Channels  map[string]ChannelConfig  `json:"channels"`
+	Bindings  []Binding                 `json:"bindings,omitempty"`
 }
 
 // ProviderConfig holds API credentials for an LLM provider.
@@ -22,20 +22,59 @@ type ProviderConfig struct {
 	APIBase string `json:"apiBase"`
 }
 
-// DefaultsConfig holds fallback values for all agents.
-type DefaultsConfig struct {
+// AgentsConfig holds agent defaults and the list of agent entries.
+type AgentsConfig struct {
+	Defaults AgentDefaults `json:"defaults"`
+	List     []AgentEntry  `json:"list,omitempty"`
+}
+
+// AgentDefaults holds fallback values for all agents.
+type AgentDefaults struct {
 	Model             string  `json:"model"`
 	MaxTokens         int     `json:"maxTokens"`
 	Temperature       float64 `json:"temperature"`
 	MaxToolIterations int     `json:"maxToolIterations"`
 }
 
-// AgentOverrideConfig is a per-agent override block in config.json.
-type AgentOverrideConfig struct {
-	Model       string   `json:"model,omitempty"`
-	MaxTokens   int      `json:"maxTokens,omitempty"`
-	Temperature float64  `json:"temperature,omitempty"`
-	Channels    []string `json:"channels,omitempty"`
+// AgentEntry is a per-agent entry in config.json agents.list.
+type AgentEntry struct {
+	ID                string  `json:"id"`
+	Workspace         string  `json:"workspace,omitempty"`
+	Model             string  `json:"model,omitempty"`
+	MaxTokens         int     `json:"maxTokens,omitempty"`
+	Temperature       float64 `json:"temperature,omitempty"`
+	MaxToolIterations int     `json:"maxToolIterations,omitempty"`
+}
+
+// ChannelConfig holds per-channel configuration with optional accounts.
+type ChannelConfig struct {
+	Enabled  bool                     `json:"enabled"`
+	BotToken string                   `json:"botToken,omitempty"`
+	Accounts map[string]AccountConfig `json:"accounts,omitempty"`
+}
+
+// AccountConfig holds account-specific overrides within a channel.
+type AccountConfig struct {
+	BotToken string `json:"botToken,omitempty"`
+}
+
+// Binding maps a match pattern to an agent.
+type Binding struct {
+	AgentID string `json:"agentId"`
+	Match   Match  `json:"match"`
+}
+
+// Match defines criteria for routing a message to an agent.
+type Match struct {
+	Channel   string `json:"channel"`
+	AccountID string `json:"accountId,omitempty"`
+	Peer      *Peer  `json:"peer,omitempty"`
+}
+
+// Peer specifies peer matching criteria.
+type Peer struct {
+	Kind string `json:"kind,omitempty"` // "group" or "dm"
+	ID   string `json:"id,omitempty"`   // specific chat/group ID
 }
 
 // AgentFileConfig is the schema for agent.json inside an agent workspace.
@@ -44,7 +83,6 @@ type AgentFileConfig struct {
 	MaxTokens         int          `json:"maxTokens,omitempty"`
 	Temperature       float64      `json:"temperature,omitempty"`
 	MaxToolIterations int          `json:"maxToolIterations,omitempty"`
-	Channels          []string     `json:"channels,omitempty"`
 	Skills            SkillsConfig `json:"skills,omitempty"`
 }
 
@@ -56,13 +94,12 @@ type SkillsConfig struct {
 
 // ResolvedAgent is the fully merged config for a single agent.
 type ResolvedAgent struct {
-	Name              string
+	ID                string
 	Workspace         string
 	Model             string
 	MaxTokens         int
 	Temperature       float64
 	MaxToolIterations int
-	Channels          []string
 	Skills            SkillsConfig
 }
 
@@ -71,17 +108,6 @@ type TeamConfig struct {
 	Name    string            `json:"name"`
 	Agents  []string          `json:"agents"`
 	Routing map[string]string `json:"routing"`
-}
-
-// ChannelsConfig holds per-channel configuration.
-type ChannelsConfig struct {
-	Telegram TelegramConfig `json:"telegram"`
-}
-
-// TelegramConfig holds Telegram bot settings.
-type TelegramConfig struct {
-	Enabled  bool   `json:"enabled"`
-	BotToken string `json:"botToken"`
 }
 
 // HomeDir returns the FastClaw home directory (~/.fastclaw).
@@ -122,104 +148,92 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 
-	if cfg.Defaults.Model == "" {
-		cfg.Defaults.Model = "gpt-4o"
+	// Apply defaults
+	if cfg.Agents.Defaults.Model == "" {
+		cfg.Agents.Defaults.Model = "gpt-4o"
 	}
-	if cfg.Defaults.MaxTokens == 0 {
-		cfg.Defaults.MaxTokens = 8192
+	if cfg.Agents.Defaults.MaxTokens == 0 {
+		cfg.Agents.Defaults.MaxTokens = 8192
 	}
-	if cfg.Defaults.Temperature == 0 {
-		cfg.Defaults.Temperature = 0.7
+	if cfg.Agents.Defaults.Temperature == 0 {
+		cfg.Agents.Defaults.Temperature = 0.7
 	}
-	if cfg.Defaults.MaxToolIterations == 0 {
-		cfg.Defaults.MaxToolIterations = 20
+	if cfg.Agents.Defaults.MaxToolIterations == 0 {
+		cfg.Agents.Defaults.MaxToolIterations = 20
 	}
 
 	return &cfg, nil
 }
 
-// ResolveAgents discovers agents from ~/.fastclaw/agents/ and merges config layers:
-// defaults < config.json agents map < agent.json file.
-func ResolveAgents(cfg *Config) ([]ResolvedAgent, error) {
-	homeDir, err := HomeDir()
-	if err != nil {
-		return nil, err
+// MergedAgentConfig merges defaults with an agent entry and its workspace agent.json
+// to produce a fully resolved agent config. Priority: agent.json > entry > defaults.
+func (cfg *Config) MergedAgentConfig(entry AgentEntry) ResolvedAgent {
+	workspace := expandPath(entry.Workspace)
+	if workspace == "" {
+		homeDir, _ := HomeDir()
+		workspace = filepath.Join(homeDir, "agents", entry.ID, "agent")
 	}
 
-	agentsDir := filepath.Join(homeDir, "agents")
-	entries, err := os.ReadDir(agentsDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return []ResolvedAgent{defaultAgent(cfg, homeDir)}, nil
-		}
-		return nil, fmt.Errorf("read agents dir: %w", err)
+	resolved := ResolvedAgent{
+		ID:                entry.ID,
+		Workspace:         workspace,
+		Model:             cfg.Agents.Defaults.Model,
+		MaxTokens:         cfg.Agents.Defaults.MaxTokens,
+		Temperature:       cfg.Agents.Defaults.Temperature,
+		MaxToolIterations: cfg.Agents.Defaults.MaxToolIterations,
 	}
 
-	var agents []ResolvedAgent
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		workspace := filepath.Join(agentsDir, name, "agent")
-
-		resolved := ResolvedAgent{
-			Name:              name,
-			Workspace:         workspace,
-			Model:             cfg.Defaults.Model,
-			MaxTokens:         cfg.Defaults.MaxTokens,
-			Temperature:       cfg.Defaults.Temperature,
-			MaxToolIterations: cfg.Defaults.MaxToolIterations,
-		}
-
-		// Layer 2: config.json per-agent overrides
-		if override, ok := cfg.Agents[name]; ok {
-			if override.Model != "" {
-				resolved.Model = override.Model
-			}
-			if override.MaxTokens > 0 {
-				resolved.MaxTokens = override.MaxTokens
-			}
-			if override.Temperature > 0 {
-				resolved.Temperature = override.Temperature
-			}
-			if len(override.Channels) > 0 {
-				resolved.Channels = override.Channels
-			}
-		}
-
-		// Layer 3: agent.json (highest priority)
-		agentJSON := filepath.Join(workspace, "agent.json")
-		if data, readErr := os.ReadFile(agentJSON); readErr == nil {
-			var fileCfg AgentFileConfig
-			if jsonErr := json.Unmarshal(data, &fileCfg); jsonErr == nil {
-				if fileCfg.Model != "" {
-					resolved.Model = fileCfg.Model
-				}
-				if fileCfg.MaxTokens > 0 {
-					resolved.MaxTokens = fileCfg.MaxTokens
-				}
-				if fileCfg.Temperature > 0 {
-					resolved.Temperature = fileCfg.Temperature
-				}
-				if fileCfg.MaxToolIterations > 0 {
-					resolved.MaxToolIterations = fileCfg.MaxToolIterations
-				}
-				if len(fileCfg.Channels) > 0 {
-					resolved.Channels = fileCfg.Channels
-				}
-				resolved.Skills = fileCfg.Skills
-			}
-		}
-
-		agents = append(agents, resolved)
+	// Layer 2: per-agent entry overrides
+	if entry.Model != "" {
+		resolved.Model = entry.Model
+	}
+	if entry.MaxTokens > 0 {
+		resolved.MaxTokens = entry.MaxTokens
+	}
+	if entry.Temperature > 0 {
+		resolved.Temperature = entry.Temperature
+	}
+	if entry.MaxToolIterations > 0 {
+		resolved.MaxToolIterations = entry.MaxToolIterations
 	}
 
-	if len(agents) == 0 {
-		return []ResolvedAgent{defaultAgent(cfg, homeDir)}, nil
+	// Layer 3: agent.json in workspace (highest priority)
+	agentJSON := filepath.Join(workspace, "agent.json")
+	if data, readErr := os.ReadFile(agentJSON); readErr == nil {
+		var fileCfg AgentFileConfig
+		if jsonErr := json.Unmarshal(data, &fileCfg); jsonErr == nil {
+			if fileCfg.Model != "" {
+				resolved.Model = fileCfg.Model
+			}
+			if fileCfg.MaxTokens > 0 {
+				resolved.MaxTokens = fileCfg.MaxTokens
+			}
+			if fileCfg.Temperature > 0 {
+				resolved.Temperature = fileCfg.Temperature
+			}
+			if fileCfg.MaxToolIterations > 0 {
+				resolved.MaxToolIterations = fileCfg.MaxToolIterations
+			}
+			resolved.Skills = fileCfg.Skills
+		}
 	}
 
-	return agents, nil
+	return resolved
+}
+
+// ResolveAgents produces resolved agent configs from config.agents.list.
+// If no agents are listed, creates a single "default" agent.
+func ResolveAgents(cfg *Config) []ResolvedAgent {
+	if len(cfg.Agents.List) == 0 {
+		entry := AgentEntry{ID: "default"}
+		return []ResolvedAgent{cfg.MergedAgentConfig(entry)}
+	}
+
+	agents := make([]ResolvedAgent, 0, len(cfg.Agents.List))
+	for _, entry := range cfg.Agents.List {
+		agents = append(agents, cfg.MergedAgentConfig(entry))
+	}
+	return agents
 }
 
 // LoadTeam reads a team.json file.
@@ -233,15 +247,4 @@ func LoadTeam(path string) (*TeamConfig, error) {
 		return nil, err
 	}
 	return &tc, nil
-}
-
-func defaultAgent(cfg *Config, homeDir string) ResolvedAgent {
-	return ResolvedAgent{
-		Name:              "default",
-		Workspace:         filepath.Join(homeDir, "agents", "default", "agent"),
-		Model:             cfg.Defaults.Model,
-		MaxTokens:         cfg.Defaults.MaxTokens,
-		Temperature:       cfg.Defaults.Temperature,
-		MaxToolIterations: cfg.Defaults.MaxToolIterations,
-	}
 }

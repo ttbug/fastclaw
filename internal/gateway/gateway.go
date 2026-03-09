@@ -17,10 +17,11 @@ import (
 
 // Gateway is the main orchestrator that starts all services.
 type Gateway struct {
-	config  *config.Config
-	bus     *bus.MessageBus
-	agents  *agent.Manager
-	chanMgr *channels.Manager
+	config   *config.Config
+	bus      *bus.MessageBus
+	agents   *agent.Manager
+	chanMgr  *channels.Manager
+	bindings []config.Binding
 }
 
 // New creates a new Gateway with multi-agent support.
@@ -31,38 +32,74 @@ func New(cfg *config.Config) (*Gateway, error) {
 	providerCfg := cfg.Providers["openai"]
 	llm := provider.NewOpenAI(providerCfg.APIKey, providerCfg.APIBase)
 
-	// Resolve agent configs from directory structure + config layers
-	resolved, err := config.ResolveAgents(cfg)
-	if err != nil {
-		return nil, err
-	}
+	// Resolve agent configs
+	resolved := config.ResolveAgents(cfg)
 
 	// Create agent manager
-	agentMgr, err := agent.NewManager(cfg, resolved, llm, mb)
+	agentMgr, err := agent.NewManager(resolved, llm, mb)
 	if err != nil {
 		return nil, err
 	}
 
 	slog.Info("agents loaded", "count", len(resolved), "names", agentMgr.Names())
 
-	// Create channel manager
+	// Create channel manager and register channel instances
 	chanMgr := channels.NewManager(mb)
 
-	// Register Telegram channel if enabled
-	if cfg.Channels.Telegram.Enabled {
-		tg, err := channels.NewTelegram(cfg.Channels.Telegram.BotToken, mb)
-		if err != nil {
-			return nil, err
-		}
-		chanMgr.Register(tg)
+	if err := registerChannels(cfg, mb, chanMgr); err != nil {
+		return nil, err
 	}
 
 	return &Gateway{
-		config:  cfg,
-		bus:     mb,
-		agents:  agentMgr,
-		chanMgr: chanMgr,
+		config:   cfg,
+		bus:      mb,
+		agents:   agentMgr,
+		chanMgr:  chanMgr,
+		bindings: cfg.Bindings,
 	}, nil
+}
+
+// registerChannels creates channel instances from config, one per account.
+func registerChannels(cfg *config.Config, mb *bus.MessageBus, chanMgr *channels.Manager) error {
+	for name, chCfg := range cfg.Channels {
+		if !chCfg.Enabled {
+			continue
+		}
+
+		switch name {
+		case "telegram":
+			if err := registerTelegramChannels(chCfg, mb, chanMgr); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func registerTelegramChannels(chCfg config.ChannelConfig, mb *bus.MessageBus, chanMgr *channels.Manager) error {
+	if len(chCfg.Accounts) == 0 {
+		// No accounts defined — use the channel-level botToken as the default account
+		tg, err := channels.NewTelegram(chCfg.BotToken, "", mb)
+		if err != nil {
+			return err
+		}
+		chanMgr.Register(tg)
+		return nil
+	}
+
+	// One instance per account
+	for accountID, acct := range chCfg.Accounts {
+		token := acct.BotToken
+		if token == "" {
+			token = chCfg.BotToken // fall back to parent
+		}
+		tg, err := channels.NewTelegram(token, accountID, mb)
+		if err != nil {
+			return err
+		}
+		chanMgr.Register(tg)
+	}
+	return nil
 }
 
 // Run starts the gateway and blocks until shutdown signal.
@@ -107,15 +144,19 @@ func (g *Gateway) processInbound(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case msg := <-g.bus.Inbound:
-			// Route to the agent that handles this channel
-			ag := g.agents.AgentForChannel(msg.Channel)
+			ag := g.matchAgent(msg)
 			if ag == nil {
-				slog.Warn("no agent for channel, dropping message", "channel", msg.Channel)
+				slog.Warn("no agent matched for message, dropping",
+					"channel", msg.Channel,
+					"account", msg.AccountID,
+					"chat_id", msg.ChatID,
+				)
 				continue
 			}
 
 			slog.Info("routing message",
 				"channel", msg.Channel,
+				"account", msg.AccountID,
 				"chat_id", msg.ChatID,
 				"agent", ag.Name(),
 			)
@@ -123,11 +164,52 @@ func (g *Gateway) processInbound(ctx context.Context) {
 			go func(m bus.InboundMessage, a *agent.Agent) {
 				reply := a.HandleMessage(ctx, m)
 				g.bus.Outbound <- bus.OutboundMessage{
-					Channel: m.Channel,
-					ChatID:  m.ChatID,
-					Text:    reply,
+					Channel:   m.Channel,
+					AccountID: m.AccountID,
+					ChatID:    m.ChatID,
+					Text:      reply,
 				}
 			}(msg, ag)
 		}
 	}
+}
+
+// matchAgent evaluates bindings top-to-bottom and returns the first matching agent.
+// Falls back to the default agent if no bindings are defined.
+func (g *Gateway) matchAgent(msg bus.InboundMessage) *agent.Agent {
+	if len(g.bindings) == 0 {
+		return g.agents.DefaultAgent()
+	}
+
+	for _, b := range g.bindings {
+		if !matchBinding(b.Match, msg) {
+			continue
+		}
+		ag := g.agents.AgentByID(b.AgentID)
+		if ag != nil {
+			return ag
+		}
+		slog.Warn("binding references unknown agent", "agentId", b.AgentID)
+	}
+
+	// No binding matched — fall back to default
+	return g.agents.DefaultAgent()
+}
+
+func matchBinding(m config.Match, msg bus.InboundMessage) bool {
+	if m.Channel != "" && m.Channel != msg.Channel {
+		return false
+	}
+	if m.AccountID != "" && m.AccountID != msg.AccountID {
+		return false
+	}
+	if m.Peer != nil {
+		if m.Peer.Kind != "" && m.Peer.Kind != msg.PeerKind {
+			return false
+		}
+		if m.Peer.ID != "" && m.Peer.ID != msg.ChatID {
+			return false
+		}
+	}
+	return true
 }
