@@ -12,6 +12,8 @@ import (
 // bootstrapFiles are loaded in order to build the system prompt.
 var bootstrapFiles = []string{
 	"AGENTS.md",
+	"BOOTSTRAP.md",
+	"HEARTBEAT.md",
 	"SOUL.md",
 	"USER.md",
 	"TOOLS.md",
@@ -20,19 +22,21 @@ var bootstrapFiles = []string{
 
 // ContextBuilder assembles the system prompt and runtime context.
 type ContextBuilder struct {
-	workspace string
-	memory    *Memory
+	workspace    string
+	memory       *Memory
+	skillsSummary string
 }
 
 // NewContextBuilder creates a new context builder.
-func NewContextBuilder(workspace string, memory *Memory) *ContextBuilder {
+func NewContextBuilder(workspace string, memory *Memory, skillsSummary string) *ContextBuilder {
 	return &ContextBuilder{
-		workspace: workspace,
-		memory:    memory,
+		workspace:    workspace,
+		memory:       memory,
+		skillsSummary: skillsSummary,
 	}
 }
 
-// BuildSystemPrompt assembles the system prompt from identity, bootstrap files, and memory.
+// BuildSystemPrompt assembles the system prompt from identity, bootstrap files, memory, and skills.
 func (cb *ContextBuilder) BuildSystemPrompt() string {
 	var parts []string
 
@@ -50,7 +54,12 @@ Working Directory: %s`, runtime.GOOS, runtime.GOARCH, cb.workspace)
 		}
 	}
 
-	// 3. Long-term memory
+	// 3. Skills
+	if cb.skillsSummary != "" {
+		parts = append(parts, fmt.Sprintf("# Skills\n%s", cb.skillsSummary))
+	}
+
+	// 4. Long-term memory
 	mem := cb.memory.LoadMemory()
 	if mem != "" {
 		parts = append(parts, fmt.Sprintf("# Long-term Memory\n%s", mem))

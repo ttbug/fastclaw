@@ -1,9 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 
@@ -17,9 +19,18 @@ func main() {
 		Short: "FastClaw - Lightweight AI Agent Framework",
 	}
 
-	gatewayCmd := &cobra.Command{
+	rootCmd.AddCommand(gatewayCmd())
+	rootCmd.AddCommand(agentCmd())
+
+	if err := rootCmd.Execute(); err != nil {
+		os.Exit(1)
+	}
+}
+
+func gatewayCmd() *cobra.Command {
+	return &cobra.Command{
 		Use:   "gateway",
-		Short: "Start the FastClaw gateway",
+		Short: "Start the FastClaw gateway (loads all agents)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 				Level: slog.LevelInfo,
@@ -31,10 +42,7 @@ func main() {
 				return fmt.Errorf("load config: %w", err)
 			}
 
-			slog.Info("starting gateway",
-				"model", cfg.Agents.Defaults.Model,
-				"workspace", cfg.Agents.Defaults.Workspace,
-			)
+			slog.Info("starting gateway")
 
 			gw, err := gateway.New(cfg)
 			if err != nil {
@@ -44,10 +52,126 @@ func main() {
 			return gw.Run()
 		},
 	}
+}
 
-	rootCmd.AddCommand(gatewayCmd)
+func agentCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "agent",
+		Short: "Manage agents",
+	}
 
-	if err := rootCmd.Execute(); err != nil {
-		os.Exit(1)
+	cmd.AddCommand(agentCreateCmd())
+	cmd.AddCommand(agentListCmd())
+
+	return cmd
+}
+
+func agentCreateCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "create <name>",
+		Short: "Create a new agent from template",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+
+			homeDir, err := config.HomeDir()
+			if err != nil {
+				return err
+			}
+
+			agentDir := filepath.Join(homeDir, "agents", name, "agent")
+
+			if _, err := os.Stat(agentDir); err == nil {
+				return fmt.Errorf("agent %q already exists at %s", name, agentDir)
+			}
+
+			// Create directory structure
+			dirs := []string{
+				agentDir,
+				filepath.Join(agentDir, "memory"),
+				filepath.Join(agentDir, "sessions"),
+				filepath.Join(agentDir, "skills"),
+			}
+			for _, dir := range dirs {
+				if err := os.MkdirAll(dir, 0o755); err != nil {
+					return fmt.Errorf("create directory %s: %w", dir, err)
+				}
+			}
+
+			// Write agent.json
+			agentCfg := config.AgentFileConfig{
+				Model:    "gpt-4o",
+				Channels: []string{},
+			}
+			data, _ := json.MarshalIndent(agentCfg, "", "  ")
+			if err := os.WriteFile(filepath.Join(agentDir, "agent.json"), data, 0o644); err != nil {
+				return err
+			}
+
+			// Write bootstrap files
+			bootstrapFiles := map[string]string{
+				"AGENTS.md":    "# Agent Capabilities\n\nDescribe what this agent can do.",
+				"IDENTITY.md":  fmt.Sprintf("# Identity\n\nYou are %s, a FastClaw AI agent.", name),
+				"SOUL.md":      "# Soul\n\nYour personality and behavioral guidelines.",
+				"USER.md":      "# User\n\nInformation about the user you serve.",
+				"TOOLS.md":     "# Tools\n\nAdditional tool usage instructions.",
+				"BOOTSTRAP.md": "# Bootstrap\n\nStartup instructions loaded on every conversation.",
+				"HEARTBEAT.md": "# Heartbeat\n\nPeriodic check-in instructions.",
+				"MEMORY.md":    "# Memory\n\nLong-term memory for this agent.",
+			}
+			for filename, content := range bootstrapFiles {
+				path := filepath.Join(agentDir, filename)
+				if err := os.WriteFile(path, []byte(content+"\n"), 0o644); err != nil {
+					return err
+				}
+			}
+
+			fmt.Printf("Agent %q created at %s\n", name, agentDir)
+			return nil
+		},
+	}
+}
+
+func agentListCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "list",
+		Short: "List all agents",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			homeDir, err := config.HomeDir()
+			if err != nil {
+				return err
+			}
+
+			agentsDir := filepath.Join(homeDir, "agents")
+			entries, err := os.ReadDir(agentsDir)
+			if err != nil {
+				if os.IsNotExist(err) {
+					fmt.Println("No agents found. Create one with: fastclaw agent create <name>")
+					return nil
+				}
+				return err
+			}
+
+			for _, entry := range entries {
+				if !entry.IsDir() {
+					continue
+				}
+				name := entry.Name()
+				workspace := filepath.Join(agentsDir, name, "agent")
+
+				agentJSON := filepath.Join(workspace, "agent.json")
+				model := "(default)"
+				if data, err := os.ReadFile(agentJSON); err == nil {
+					var fc config.AgentFileConfig
+					if json.Unmarshal(data, &fc) == nil && fc.Model != "" {
+						model = fc.Model
+					}
+				}
+
+				fmt.Printf("  %s  model=%s  workspace=%s\n", name, model, workspace)
+			}
+
+			return nil
+		},
 	}
 }

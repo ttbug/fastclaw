@@ -17,13 +17,13 @@ import (
 
 // Gateway is the main orchestrator that starts all services.
 type Gateway struct {
-	config *config.Config
-	bus    *bus.MessageBus
-	agent  *agent.Agent
+	config  *config.Config
+	bus     *bus.MessageBus
+	agents  *agent.Manager
 	chanMgr *channels.Manager
 }
 
-// New creates a new Gateway.
+// New creates a new Gateway with multi-agent support.
 func New(cfg *config.Config) (*Gateway, error) {
 	mb := bus.New()
 
@@ -31,8 +31,19 @@ func New(cfg *config.Config) (*Gateway, error) {
 	providerCfg := cfg.Providers["openai"]
 	llm := provider.NewOpenAI(providerCfg.APIKey, providerCfg.APIBase)
 
-	// Create agent
-	ag := agent.NewAgent(llm, cfg.Agents.Defaults, mb)
+	// Resolve agent configs from directory structure + config layers
+	resolved, err := config.ResolveAgents(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create agent manager
+	agentMgr, err := agent.NewManager(cfg, resolved, llm, mb)
+	if err != nil {
+		return nil, err
+	}
+
+	slog.Info("agents loaded", "count", len(resolved), "names", agentMgr.Names())
 
 	// Create channel manager
 	chanMgr := channels.NewManager(mb)
@@ -49,7 +60,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 	return &Gateway{
 		config:  cfg,
 		bus:     mb,
-		agent:   ag,
+		agents:  agentMgr,
 		chanMgr: chanMgr,
 	}, nil
 }
@@ -59,7 +70,6 @@ func (g *Gateway) Run() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Handle shutdown signals
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
@@ -77,7 +87,7 @@ func (g *Gateway) Run() error {
 		g.processInbound(ctx)
 	}()
 
-	// Start channel manager (blocks until ctx cancelled)
+	// Start channel manager
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -97,17 +107,27 @@ func (g *Gateway) processInbound(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case msg := <-g.bus.Inbound:
-			slog.Info("processing message", "channel", msg.Channel, "chat_id", msg.ChatID)
+			// Route to the agent that handles this channel
+			ag := g.agents.AgentForChannel(msg.Channel)
+			if ag == nil {
+				slog.Warn("no agent for channel, dropping message", "channel", msg.Channel)
+				continue
+			}
 
-			// Process in a goroutine to handle concurrent messages
-			go func(m bus.InboundMessage) {
-				reply := g.agent.HandleMessage(ctx, m)
+			slog.Info("routing message",
+				"channel", msg.Channel,
+				"chat_id", msg.ChatID,
+				"agent", ag.Name(),
+			)
+
+			go func(m bus.InboundMessage, a *agent.Agent) {
+				reply := a.HandleMessage(ctx, m)
 				g.bus.Outbound <- bus.OutboundMessage{
 					Channel: m.Channel,
 					ChatID:  m.ChatID,
 					Text:    reply,
 				}
-			}(msg)
+			}(msg, ag)
 		}
 	}
 }
