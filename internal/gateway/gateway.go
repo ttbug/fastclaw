@@ -43,8 +43,21 @@ type Gateway struct {
 func New(cfg *config.Config) (*Gateway, error) {
 	mb := bus.New()
 
-	// Create LLM provider
-	providerCfg := cfg.Providers["openai"]
+	// Create LLM provider — try known keys in order, fall back to first available
+	var providerCfg config.ProviderConfig
+	for _, key := range []string{"default", "openai", "openrouter"} {
+		if p, ok := cfg.Providers[key]; ok {
+			providerCfg = p
+			break
+		}
+	}
+	if providerCfg.APIKey == "" {
+		// Use the first provider defined
+		for _, p := range cfg.Providers {
+			providerCfg = p
+			break
+		}
+	}
 	llm := provider.NewOpenAI(providerCfg.APIKey, providerCfg.APIBase)
 
 	// Resolve agent configs
