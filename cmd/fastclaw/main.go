@@ -21,6 +21,10 @@ func main() {
 	rootCmd := &cobra.Command{
 		Use:   "fastclaw",
 		Short: "FastClaw - Lightweight AI Agent Framework",
+		// No args = default to gateway (so double-click on Windows works)
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runGateway(18953)
+		},
 	}
 
 	rootCmd.AddCommand(gatewayCmd())
@@ -37,30 +41,34 @@ func gatewayCmd() *cobra.Command {
 		Use:   "gateway",
 		Short: "Start the FastClaw gateway (loads all agents)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-				Level: slog.LevelInfo,
-			})))
-
-			// Check if config exists
-			cfg, err := config.Load()
-			if err != nil {
-				// Config doesn't exist — run setup wizard
-				slog.Info("no config found, starting setup wizard")
-				return runSetupWizard(port)
-			}
-
-			slog.Info("starting gateway")
-
-			gw, err := gateway.New(cfg)
-			if err != nil {
-				return fmt.Errorf("create gateway: %w", err)
-			}
-
-			return gw.Run()
+			return runGateway(port)
 		},
 	}
 	cmd.Flags().IntVar(&port, "port", 18953, "port for setup wizard / web UI")
 	return cmd
+}
+
+func runGateway(port int) error {
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	})))
+
+	// Check if config exists
+	cfg, err := config.Load()
+	if err != nil {
+		// Config doesn't exist — run setup wizard
+		slog.Info("no config found, starting setup wizard", "url", fmt.Sprintf("http://localhost:%d", port))
+		return runSetupWizard(port)
+	}
+
+	slog.Info("starting gateway")
+
+	gw, err := gateway.New(cfg)
+	if err != nil {
+		return fmt.Errorf("create gateway: %w", err)
+	}
+
+	return gw.Run()
 }
 
 func runSetupWizard(port int) error {
@@ -69,7 +77,6 @@ func runSetupWizard(port int) error {
 
 	srv := setup.NewServer(port, func(cfg *config.Config) {
 		slog.Info("setup complete, config saved")
-		// Cancel the setup server so it shuts down
 		cancel()
 	})
 
@@ -126,7 +133,6 @@ func agentCreateCmd() *cobra.Command {
 				return fmt.Errorf("agent %q already exists at %s", name, agentDir)
 			}
 
-			// Create directory structure
 			dirs := []string{
 				agentDir,
 				filepath.Join(agentDir, "memory"),
@@ -139,7 +145,6 @@ func agentCreateCmd() *cobra.Command {
 				}
 			}
 
-			// Write agent.json
 			agentCfg := config.AgentFileConfig{
 				Model: "gpt-4o",
 			}
@@ -148,7 +153,6 @@ func agentCreateCmd() *cobra.Command {
 				return err
 			}
 
-			// Write bootstrap files
 			bootstrapFiles := map[string]string{
 				"AGENTS.md":    "# Agent Capabilities\n\nDescribe what this agent can do.",
 				"IDENTITY.md":  fmt.Sprintf("# Identity\n\nYou are %s, a FastClaw AI agent.", name),
