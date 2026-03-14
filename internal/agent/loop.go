@@ -98,6 +98,18 @@ func (a *Agent) Name() string {
 	return a.name
 }
 
+// HandleWebChat handles a chat message from the web UI.
+func (a *Agent) HandleWebChat(ctx context.Context, text string) string {
+	msg := bus.InboundMessage{
+		Channel:  "web",
+		ChatID:   "web-ui",
+		UserID:   "web-user",
+		Text:     text,
+		PeerKind: "dm",
+	}
+	return a.HandleMessage(ctx, msg)
+}
+
 // workspace returns the agent's workspace path.
 func (a *Agent) workspace() string {
 	return a.workspacePath

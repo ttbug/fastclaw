@@ -12,6 +12,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/fastclaw-ai/fastclaw/internal/agent"
 	"github.com/fastclaw-ai/fastclaw/internal/config"
 	"github.com/fastclaw-ai/fastclaw/internal/gateway"
 	"github.com/fastclaw-ai/fastclaw/internal/setup"
@@ -68,7 +69,44 @@ func runGateway(port int) error {
 		return fmt.Errorf("create gateway: %w", err)
 	}
 
+	// Start web UI server alongside gateway
+	webSrv := setup.NewServer(port, nil)
+	webSrv.SetAgentProvider(&agentProviderAdapter{mgr: gw.AgentManager()})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() {
+		if err := webSrv.Run(ctx); err != nil {
+			slog.Error("web server error", "error", err)
+		}
+	}()
+
+	slog.Info("web UI available", "url", fmt.Sprintf("http://localhost:%d", port))
+
 	return gw.Run()
+}
+
+// agentProviderAdapter adapts agent.Manager to setup.AgentProvider.
+type agentProviderAdapter struct {
+	mgr *agent.Manager
+}
+
+func (a *agentProviderAdapter) AllAgents() []setup.AgentHandle {
+	agents := a.mgr.All()
+	result := make([]setup.AgentHandle, len(agents))
+	for i, ag := range agents {
+		result[i] = ag
+	}
+	return result
+}
+
+func (a *agentProviderAdapter) AgentByID(id string) setup.AgentHandle {
+	ag := a.mgr.AgentByID(id)
+	if ag == nil {
+		return nil
+	}
+	return ag
 }
 
 func runSetupWizard(port int) error {

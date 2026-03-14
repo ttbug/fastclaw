@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "FastClaw Setup",
-  description: "Configure your FastClaw AI agent",
+  title: "FastClaw",
+  description: "AI Agent Framework",
 };
 
 export default function RootLayout({

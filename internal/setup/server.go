@@ -12,20 +12,40 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/fastclaw-ai/fastclaw/internal/config"
 )
 
+// AgentHandle is a minimal interface for interacting with an agent from the web UI.
+type AgentHandle interface {
+	Name() string
+	HandleWebChat(ctx context.Context, text string) string
+}
+
+// AgentProvider gives the server access to the running agents.
+type AgentProvider interface {
+	AllAgents() []AgentHandle
+	AgentByID(id string) AgentHandle
+}
+
 // Server serves the setup wizard UI and handles config API endpoints.
 type Server struct {
-	port     int
-	onConfig func(*config.Config) // called after config is saved
+	port          int
+	onConfig      func(*config.Config) // called after config is saved
+	agentProvider AgentProvider
+	startedAt     time.Time
 }
 
 // NewServer creates a setup wizard server on the given port.
 func NewServer(port int, onConfig func(*config.Config)) *Server {
-	return &Server{port: port, onConfig: onConfig}
+	return &Server{port: port, onConfig: onConfig, startedAt: time.Now()}
+}
+
+// SetAgentProvider sets the agent provider for chat and status endpoints.
+func (s *Server) SetAgentProvider(ap AgentProvider) {
+	s.agentProvider = ap
 }
 
 // Run starts the HTTP server and blocks until the context is canceled
@@ -35,16 +55,19 @@ func (s *Server) Run(ctx context.Context) error {
 
 	// API routes
 	mux.HandleFunc("GET /api/status", s.handleStatus)
+	mux.HandleFunc("GET /api/config", s.handleGetConfig)
 	mux.HandleFunc("POST /api/test-provider", s.handleTestProvider)
 	mux.HandleFunc("POST /api/save-config", s.handleSaveConfig)
+	mux.HandleFunc("POST /api/chat", s.handleChat)
 
 	// Static files from embedded web/out
 	webRoot, err := fs.Sub(webFS, "web")
 	if err != nil {
 		return fmt.Errorf("setup: embed sub: %w", err)
 	}
-	fileServer := http.FileServer(http.FS(webRoot))
-	mux.Handle("/", fileServer)
+
+	// Serve static files with SPA fallback
+	mux.Handle("/", spaHandler{fs: http.FS(webRoot)})
 
 	addr := fmt.Sprintf(":%d", s.port)
 	srv := &http.Server{
@@ -65,25 +88,175 @@ func (s *Server) Run(ctx context.Context) error {
 		return fmt.Errorf("setup: listen %s: %w", addr, err)
 	}
 
-	slog.Info("setup wizard running", "url", fmt.Sprintf("http://localhost:%d", s.port))
+	slog.Info("web UI running", "url", fmt.Sprintf("http://localhost:%d", s.port))
 	if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 		return err
 	}
 	return nil
 }
 
+// spaHandler serves static files, falling back to the directory's index.html
+// for paths that don't match a file (to support client-side routing).
+type spaHandler struct {
+	fs http.FileSystem
+}
+
+func (h spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Path
+
+	// Try to open the file directly
+	f, err := h.fs.Open(path)
+	if err == nil {
+		stat, statErr := f.Stat()
+		f.Close()
+		if statErr == nil && !stat.IsDir() {
+			http.FileServer(h.fs).ServeHTTP(w, r)
+			return
+		}
+	}
+
+	// Try path/index.html (for directory-style routes like /overview/)
+	indexPath := strings.TrimSuffix(path, "/") + "/index.html"
+	f, err = h.fs.Open(indexPath)
+	if err == nil {
+		f.Close()
+		r.URL.Path = indexPath
+		http.FileServer(h.fs).ServeHTTP(w, r)
+		return
+	}
+
+	// Try path.html (for non-trailing-slash routes like /overview)
+	htmlPath := strings.TrimSuffix(path, "/") + ".html"
+	f, err = h.fs.Open(htmlPath)
+	if err == nil {
+		f.Close()
+		r.URL.Path = htmlPath
+		http.FileServer(h.fs).ServeHTTP(w, r)
+		return
+	}
+
+	// Fall back to /index.html for client-side routing
+	r.URL.Path = "/index.html"
+	http.FileServer(h.fs).ServeHTTP(w, r)
+}
+
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	homeDir, err := config.HomeDir()
 	if err != nil {
-		jsonResponse(w, http.StatusOK, map[string]any{"configured": false, "running": false})
+		jsonResponse(w, http.StatusOK, map[string]any{
+			"configured": false,
+			"running":    false,
+		})
 		return
 	}
 	configPath := filepath.Join(homeDir, "fastclaw.json")
-	_, err = os.Stat(configPath)
-	jsonResponse(w, http.StatusOK, map[string]any{
-		"configured": err == nil,
-		"running":    false,
-	})
+	_, statErr := os.Stat(configPath)
+	configured := statErr == nil
+
+	resp := map[string]any{
+		"configured": configured,
+		"running":    s.agentProvider != nil,
+		"port":       s.port,
+		"agents":     []any{},
+		"channels":   []any{},
+		"provider":   nil,
+		"uptime":     "",
+	}
+
+	if s.agentProvider != nil {
+		resp["uptime"] = formatDuration(time.Since(s.startedAt))
+		var agentList []map[string]string
+		for _, ag := range s.agentProvider.AllAgents() {
+			agentList = append(agentList, map[string]string{
+				"id": ag.Name(),
+			})
+		}
+		resp["agents"] = agentList
+	}
+
+	// Load config for provider/channel/agent details
+	if configured {
+		cfg, loadErr := config.Load()
+		if loadErr == nil {
+			// Provider info
+			for name, prov := range cfg.Providers {
+				maskedKey := maskAPIKey(prov.APIKey)
+				resp["provider"] = map[string]string{
+					"name":   name,
+					"model":  cfg.Agents.Defaults.Model,
+					"apiBase": prov.APIBase,
+					"apiKey": maskedKey,
+				}
+				break // use first provider
+			}
+
+			// Channel info
+			var channelList []map[string]string
+			for chType, ch := range cfg.Channels {
+				if !ch.Enabled {
+					continue
+				}
+				entry := map[string]string{"type": chType}
+				channelList = append(channelList, entry)
+			}
+			if len(channelList) > 0 {
+				resp["channels"] = channelList
+			}
+
+			// Agent info with model details
+			if s.agentProvider == nil {
+				// Not running - get agent list from config
+				resolved := config.ResolveAgents(cfg)
+				var agentList []map[string]string
+				for _, ra := range resolved {
+					agentList = append(agentList, map[string]string{
+						"id":        ra.ID,
+						"model":     ra.Model,
+						"workspace": ra.Workspace,
+					})
+				}
+				resp["agents"] = agentList
+			} else {
+				// Running - enrich with model info from config
+				resolved := config.ResolveAgents(cfg)
+				modelMap := make(map[string]string)
+				wsMap := make(map[string]string)
+				for _, ra := range resolved {
+					modelMap[ra.ID] = ra.Model
+					wsMap[ra.ID] = ra.Workspace
+				}
+				var agentList []map[string]string
+				for _, ag := range s.agentProvider.AllAgents() {
+					agentList = append(agentList, map[string]string{
+						"id":        ag.Name(),
+						"model":     modelMap[ag.Name()],
+						"workspace": wsMap[ag.Name()],
+					})
+				}
+				resp["agents"] = agentList
+			}
+		}
+	}
+
+	jsonResponse(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
+	cfg, err := config.Load()
+	if err != nil {
+		jsonResponse(w, http.StatusOK, map[string]any{"error": "no config found"})
+		return
+	}
+
+	// Mask API keys
+	masked := *cfg
+	masked.Providers = make(map[string]config.ProviderConfig)
+	for k, v := range cfg.Providers {
+		v.APIKey = maskAPIKey(v.APIKey)
+		masked.Providers[k] = v
+	}
+
+	jsonResponse(w, http.StatusOK, masked)
 }
 
 type testProviderRequest struct {
@@ -134,6 +307,35 @@ func (s *Server) handleTestProvider(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonResponse(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+type chatRequest struct {
+	AgentID string `json:"agentId"`
+	Message string `json:"message"`
+}
+
+func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
+	if s.agentProvider == nil {
+		jsonResponse(w, http.StatusServiceUnavailable, map[string]any{
+			"error": "gateway is not running",
+		})
+		return
+	}
+
+	var req chatRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": "invalid request"})
+		return
+	}
+
+	ag := s.agentProvider.AgentByID(req.AgentID)
+	if ag == nil {
+		jsonResponse(w, http.StatusNotFound, map[string]any{"error": "agent not found"})
+		return
+	}
+
+	reply := ag.HandleWebChat(r.Context(), req.Message)
+	jsonResponse(w, http.StatusOK, map[string]any{"response": reply})
 }
 
 type saveConfigRequest struct {
@@ -266,4 +468,28 @@ func jsonResponse(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(data)
+}
+
+func maskAPIKey(key string) string {
+	if len(key) <= 8 {
+		return "****"
+	}
+	return key[:4] + "****" + key[len(key)-4:]
+}
+
+func formatDuration(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	}
+	hours := int(d.Hours())
+	mins := int(d.Minutes()) % 60
+	if hours < 24 {
+		return fmt.Sprintf("%dh %dm", hours, mins)
+	}
+	days := hours / 24
+	hours = hours % 24
+	return fmt.Sprintf("%dd %dh", days, hours)
 }

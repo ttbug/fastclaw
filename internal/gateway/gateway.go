@@ -141,6 +141,11 @@ func New(cfg *config.Config) (*Gateway, error) {
 	}, nil
 }
 
+// AgentManager returns the gateway's agent manager.
+func (g *Gateway) AgentManager() *agent.Manager {
+	return g.agents
+}
+
 // buildBotUsernames creates agentID -> botUsername mapping by looking at bindings
 // and resolving the bot username from the channel manager.
 func buildBotUsernames(bindings []config.Binding, chanMgr *channels.Manager) map[string]string {
