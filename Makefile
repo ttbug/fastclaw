@@ -1,11 +1,16 @@
-.PHONY: build clean release install test
+.PHONY: build build-web clean release install test
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 DATE    ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 LDFLAGS  = -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(DATE)
 
-build:
+build-web:
+	cd web && pnpm build
+	rm -rf internal/setup/web
+	cp -r web/out internal/setup/web
+
+build: build-web
 	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o bin/fastclaw ./cmd/fastclaw
 
 install: build

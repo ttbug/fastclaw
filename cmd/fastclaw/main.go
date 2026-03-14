@@ -1,16 +1,20 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 
 	"github.com/spf13/cobra"
 
 	"github.com/fastclaw-ai/fastclaw/internal/config"
 	"github.com/fastclaw-ai/fastclaw/internal/gateway"
+	"github.com/fastclaw-ai/fastclaw/internal/setup"
 )
 
 func main() {
@@ -28,7 +32,8 @@ func main() {
 }
 
 func gatewayCmd() *cobra.Command {
-	return &cobra.Command{
+	var port int
+	cmd := &cobra.Command{
 		Use:   "gateway",
 		Short: "Start the FastClaw gateway (loads all agents)",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -36,10 +41,12 @@ func gatewayCmd() *cobra.Command {
 				Level: slog.LevelInfo,
 			})))
 
-			slog.Info("loading config")
+			// Check if config exists
 			cfg, err := config.Load()
 			if err != nil {
-				return fmt.Errorf("load config: %w", err)
+				// Config doesn't exist — run setup wizard
+				slog.Info("no config found, starting setup wizard")
+				return runSetupWizard(port)
 			}
 
 			slog.Info("starting gateway")
@@ -52,6 +59,40 @@ func gatewayCmd() *cobra.Command {
 			return gw.Run()
 		},
 	}
+	cmd.Flags().IntVar(&port, "port", 18953, "port for setup wizard / web UI")
+	return cmd
+}
+
+func runSetupWizard(port int) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	srv := setup.NewServer(port, func(cfg *config.Config) {
+		slog.Info("setup complete, config saved")
+		// Cancel the setup server so it shuts down
+		cancel()
+	})
+
+	// Open browser
+	url := fmt.Sprintf("http://localhost:%d", port)
+	go openBrowser(url)
+
+	return srv.Run(ctx)
+}
+
+func openBrowser(url string) {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", url)
+	case "linux":
+		cmd = exec.Command("xdg-open", url)
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	default:
+		return
+	}
+	cmd.Run()
 }
 
 func agentCmd() *cobra.Command {

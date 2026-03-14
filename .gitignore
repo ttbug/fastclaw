@@ -45,3 +45,14 @@ config.json
 debug/
 __debug_bin*
 DESIGN.md
+
+# Web build artifacts (embedded at build time)
+internal/setup/web/
+web/out/
+web/node_modules/
+web/.next/
+
+# Web build artifacts
+web/.next/
+web/node_modules/
+web/out/
