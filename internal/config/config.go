@@ -34,6 +34,15 @@ type HeartbeatCfg struct {
 	IntervalMinutes int `json:"intervalMinutes,omitempty"` // default 30
 }
 
+// StorageCfg configures the storage backend.
+// Default: file-based. For cloud multi-tenant: "postgres" or "sqlite".
+type StorageCfg struct {
+	Type        string `json:"type,omitempty"`        // "file" (default), "postgres", "sqlite"
+	DSN         string `json:"dsn,omitempty"`          // database connection string
+	AutoMigrate bool   `json:"autoMigrate,omitempty"` // auto-create tables on startup
+}
+
+
 // Config is the top-level configuration loaded from ~/.fastclaw/fastclaw.json.
 type Config struct {
 	Providers  map[string]ProviderConfig  `json:"providers"`
@@ -44,6 +53,7 @@ type Config struct {
 	MCPServers map[string]MCPServerConfig `json:"mcpServers,omitempty"`
 	CronJobs   []CronJob                  `json:"cronJobs,omitempty"`
 	Heartbeat  HeartbeatCfg               `json:"heartbeat,omitempty"`
+	Storage    StorageCfg                 `json:"storage,omitempty"`
 }
 
 // ProviderConfig holds API credentials for an LLM provider.
