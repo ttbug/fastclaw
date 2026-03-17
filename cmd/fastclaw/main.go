@@ -31,9 +31,12 @@ func main() {
 	rootCmd.AddCommand(gatewayCmd())
 	rootCmd.AddCommand(agentCmd())
 	rootCmd.AddCommand(skillCmd())
+	rootCmd.AddCommand(sessionCmd())
 	rootCmd.AddCommand(versionCmd())
 	rootCmd.AddCommand(upgradeCmd())
 	rootCmd.AddCommand(doctorCmd())
+	rootCmd.AddCommand(backupCmd())
+	rootCmd.AddCommand(resetCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)

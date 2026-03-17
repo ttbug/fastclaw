@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -28,9 +29,11 @@ type Agent struct {
 	maxTokens         int
 	temperature       float64
 	maxToolIterations int
+	thinking          string
 	workspacePath     string
 	homeDir           string
 	skillsCfg         config.SkillsConfig
+	subAgentSpawner   tools.SubAgentSpawner
 }
 
 // NewAgent creates a new Agent from a resolved config.
@@ -64,12 +67,13 @@ func NewAgent(rc config.ResolvedAgent, prov provider.Provider, mb *bus.MessageBu
 		registry:          registry,
 		sessions:          session.NewManager(rc.Workspace + "/sessions"),
 		memory:            memory,
-		ctxBuilder:        NewContextBuilder(rc.Workspace, memory, skillsSummary),
+		ctxBuilder:        newContextBuilderWithThinking(rc.Workspace, memory, skillsSummary, rc.Thinking),
 		hooks:             hooks,
 		model:             rc.Model,
 		maxTokens:         rc.MaxTokens,
 		temperature:       rc.Temperature,
 		maxToolIterations: rc.MaxToolIterations,
+		thinking:          rc.Thinking,
 		workspacePath:     rc.Workspace,
 		homeDir:           homeDir,
 		skillsCfg:         rc.Skills,
@@ -95,6 +99,14 @@ func NewAgent(rc config.ResolvedAgent, prov provider.Provider, mb *bus.MessageBu
 	}
 
 	return ag
+}
+
+func newContextBuilderWithThinking(workspace string, memory *Memory, skillsSummary string, thinking string) *ContextBuilder {
+	cb := NewContextBuilder(workspace, memory, skillsSummary)
+	if thinking != "" {
+		cb.SetThinking(thinking)
+	}
+	return cb
 }
 
 // Name returns the agent's name.
@@ -137,8 +149,34 @@ func (a *Agent) InjectGroupMessage(ctx context.Context, msg bus.InboundMessage) 
 	sess.Append(provider.Message{Role: "user", Content: content})
 }
 
+// SetSubAgentSpawner sets the sub-agent spawner for the spawn_subagent tool.
+func (a *Agent) SetSubAgentSpawner(spawner tools.SubAgentSpawner) {
+	a.subAgentSpawner = spawner
+	tools.RegisterSubAgent(a.registry, spawner, a.name)
+}
+
+// RegisterWebSearchTool registers the web_search tool with the given API key.
+func (a *Agent) RegisterWebSearchTool(apiKey string) {
+	tools.RegisterWebSearch(a.registry, apiKey)
+}
+
+// Sessions returns the session manager for this agent.
+func (a *Agent) Sessions() *session.Manager {
+	return a.sessions
+}
+
+// Model returns the agent's model name.
+func (a *Agent) Model() string {
+	return a.model
+}
+
 // HandleMessage processes an inbound message through the ReAct loop.
 func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) string {
+	// Check for slash commands first
+	if result := a.handleSlashCommand(msg); result.handled {
+		return result.reply
+	}
+
 	sess := a.sessions.Get(msg.Channel, msg.ChatID)
 
 	// Hook: BeforeSystemPrompt
@@ -172,6 +210,14 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 	messages = append(messages, sessionMsgs...)
 
 	toolDefs := a.registry.Definitions()
+
+	// Loop detection: track consecutive identical tool calls
+	type toolCallSig struct {
+		name string
+		hash [32]byte
+	}
+	var lastSig toolCallSig
+	consecutiveCount := 0
 
 	// ReAct loop
 	for i := 0; i < a.maxToolIterations; i++ {
@@ -210,7 +256,31 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 		sess.Append(assistantMsg)
 		messages = append(messages, assistantMsg)
 
+		loopDetected := false
 		for _, tc := range resp.ToolCalls {
+			// Loop detection
+			sig := toolCallSig{
+				name: tc.Function.Name,
+				hash: sha256.Sum256([]byte(tc.Function.Arguments)),
+			}
+			if sig.name == lastSig.name && sig.hash == lastSig.hash {
+				consecutiveCount++
+			} else {
+				consecutiveCount = 1
+				lastSig = sig
+			}
+			if consecutiveCount >= 3 {
+				slog.Warn("tool loop detected", "agent", a.name, "tool", tc.Function.Name)
+				warnMsg := provider.Message{
+					Role:    "system",
+					Content: "Loop detected: you called the same tool with the same arguments 3 times. Please try a different approach.",
+				}
+				sess.Append(warnMsg)
+				messages = append(messages, warnMsg)
+				loopDetected = true
+				break
+			}
+
 			// Hook: BeforeToolCall
 			hcToolBefore := &HookContext{
 				AgentName: a.name,
@@ -255,6 +325,9 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 			}
 			sess.Append(toolMsg)
 			messages = append(messages, toolMsg)
+		}
+		if loopDetected {
+			break
 		}
 	}
 

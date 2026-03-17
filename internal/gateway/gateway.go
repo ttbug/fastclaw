@@ -11,11 +11,13 @@ import (
 	"time"
 
 	"github.com/fastclaw-ai/fastclaw/internal/agent"
+	"github.com/fastclaw-ai/fastclaw/internal/agent/tools"
 	"github.com/fastclaw-ai/fastclaw/internal/bus"
 	"github.com/fastclaw-ai/fastclaw/internal/channels"
 	"github.com/fastclaw-ai/fastclaw/internal/config"
 	"github.com/fastclaw-ai/fastclaw/internal/cron"
 	"github.com/fastclaw-ai/fastclaw/internal/provider"
+	"github.com/fastclaw-ai/fastclaw/internal/webhook"
 )
 
 const dedupTTL = 60 * time.Second
@@ -38,6 +40,7 @@ type Gateway struct {
 	dedup        sync.Map                    // dedup key -> dedupEntry
 	heartbeats   []*agent.Heartbeat
 	scheduler    *cron.Scheduler
+	webhookSrv   *webhook.Server
 }
 
 // New creates a new Gateway with multi-agent support.
@@ -142,6 +145,26 @@ func New(cfg *config.Config) (*Gateway, error) {
 	}
 	scheduler := cron.NewScheduler(cronJobs, mb)
 
+	// Register web search tool for all agents if configured
+	if cfg.WebSearch.APIKey != "" {
+		for _, ag := range agentMgr.All() {
+			ag.RegisterWebSearchTool(cfg.WebSearch.APIKey)
+		}
+		slog.Info("web search registered", "provider", cfg.WebSearch.Provider)
+	}
+
+	// Register sub-agent spawner for all agents
+	spawner := &gatewaySubAgentSpawner{agents: agentMgr}
+	for _, ag := range agentMgr.All() {
+		ag.SetSubAgentSpawner(spawner)
+	}
+
+	// Set up webhook server if enabled
+	var webhookSrv *webhook.Server
+	if cfg.Hooks.Enabled {
+		webhookSrv = webhook.NewServer(cfg.Hooks.Token, cfg.Hooks.Path, &webhookAgentHandler{agents: agentMgr})
+	}
+
 	return &Gateway{
 		config:       cfg,
 		bus:          mb,
@@ -152,6 +175,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 		teams:        teams,
 		heartbeats:   heartbeats,
 		scheduler:    scheduler,
+		webhookSrv:   webhookSrv,
 	}, nil
 }
 
@@ -186,6 +210,14 @@ func registerChannels(cfg *config.Config, mb *bus.MessageBus, chanMgr *channels.
 		switch name {
 		case "telegram":
 			if err := registerTelegramChannels(chCfg, mb, chanMgr); err != nil {
+				return err
+			}
+		case "discord":
+			if err := registerDiscordChannels(chCfg, mb, chanMgr); err != nil {
+				return err
+			}
+		case "slack":
+			if err := registerSlackChannels(chCfg, mb, chanMgr); err != nil {
 				return err
 			}
 		}
@@ -274,6 +306,22 @@ func (g *Gateway) Run() error {
 		defer wg.Done()
 		g.scheduler.Start(ctx)
 	}()
+
+	// Start webhook server if configured
+	if g.webhookSrv != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			port := g.config.Hooks.Port
+			if port == 0 {
+				port = 18954
+			}
+			addr := fmt.Sprintf(":%d", port)
+			if err := g.webhookSrv.ListenAndServe(ctx, addr); err != nil {
+				slog.Error("webhook server error", "error", err)
+			}
+		}()
+	}
 
 	slog.Info("gateway started")
 
@@ -615,6 +663,84 @@ func (g *Gateway) matchAgent(msg bus.InboundMessage) *agent.Agent {
 
 	// No binding matched — fall back to default
 	return g.agents.DefaultAgent()
+}
+
+// gatewaySubAgentSpawner implements tools.SubAgentSpawner.
+type gatewaySubAgentSpawner struct {
+	agents *agent.Manager
+}
+
+func (s *gatewaySubAgentSpawner) SpawnSubAgent(ctx context.Context, agentID string, msg bus.InboundMessage) string {
+	ag := s.agents.AgentByID(agentID)
+	if ag == nil {
+		return fmt.Sprintf("Error: agent %q not found", agentID)
+	}
+	return ag.HandleMessage(ctx, msg)
+}
+
+// Ensure gatewaySubAgentSpawner satisfies the interface.
+var _ tools.SubAgentSpawner = (*gatewaySubAgentSpawner)(nil)
+
+// webhookAgentHandler implements webhook.AgentHandler.
+type webhookAgentHandler struct {
+	agents *agent.Manager
+}
+
+func (h *webhookAgentHandler) HandleMessage(ctx context.Context, agentID string, msg bus.InboundMessage) (string, error) {
+	ag := h.agents.AgentByID(agentID)
+	if ag == nil {
+		return "", fmt.Errorf("agent %q not found", agentID)
+	}
+	reply := ag.HandleMessage(ctx, msg)
+	return reply, nil
+}
+
+func registerDiscordChannels(chCfg config.ChannelConfig, mb *bus.MessageBus, chanMgr *channels.Manager) error {
+	if len(chCfg.Accounts) == 0 {
+		dc, err := channels.NewDiscord(chCfg.BotToken, "", mb)
+		if err != nil {
+			return err
+		}
+		chanMgr.Register(dc)
+		return nil
+	}
+
+	for accountID, acct := range chCfg.Accounts {
+		token := acct.BotToken
+		if token == "" {
+			token = chCfg.BotToken
+		}
+		dc, err := channels.NewDiscord(token, accountID, mb)
+		if err != nil {
+			return err
+		}
+		chanMgr.Register(dc)
+	}
+	return nil
+}
+
+func registerSlackChannels(chCfg config.ChannelConfig, mb *bus.MessageBus, chanMgr *channels.Manager) error {
+	if len(chCfg.Accounts) == 0 {
+		sl, err := channels.NewSlack(chCfg.BotToken, chCfg.AppToken, "", mb)
+		if err != nil {
+			return err
+		}
+		chanMgr.Register(sl)
+		return nil
+	}
+
+	for accountID, acct := range chCfg.Accounts {
+		botToken := acct.BotToken
+		if botToken == "" {
+			botToken = chCfg.BotToken
+		}
+		sl, err := channels.NewSlack(botToken, chCfg.AppToken, accountID, mb)
+		if err != nil {
+			return err
+		}
+		chanMgr.Register(sl)
+	}
+	return nil
 }
 
 func matchBinding(m config.Match, msg bus.InboundMessage) bool {

@@ -452,6 +452,240 @@ func skillRemoveCmd() *cobra.Command {
 	}
 }
 
+// sessionCmd handles session management subcommands.
+func sessionCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "session",
+		Short: "Manage sessions",
+	}
+	cmd.AddCommand(sessionListCmd())
+	cmd.AddCommand(sessionClearCmd())
+	cmd.AddCommand(sessionClearAllCmd())
+	return cmd
+}
+
+func sessionListCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "list",
+		Short: "List all sessions across all agents",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			homeDir, err := config.HomeDir()
+			if err != nil {
+				return err
+			}
+
+			agentsDir := filepath.Join(homeDir, "agents")
+			entries, err := os.ReadDir(agentsDir)
+			if err != nil {
+				if os.IsNotExist(err) {
+					fmt.Println("No agents found.")
+					return nil
+				}
+				return err
+			}
+
+			found := false
+			for _, entry := range entries {
+				if !entry.IsDir() {
+					continue
+				}
+				sessDir := filepath.Join(agentsDir, entry.Name(), "agent", "sessions")
+				sessFiles, err := os.ReadDir(sessDir)
+				if err != nil {
+					continue
+				}
+				for _, sf := range sessFiles {
+					if sf.IsDir() || !strings.HasSuffix(sf.Name(), ".jsonl") {
+						continue
+					}
+					found = true
+					info, _ := sf.Info()
+					size := int64(0)
+					if info != nil {
+						size = info.Size()
+					}
+					sessKey := strings.TrimSuffix(sf.Name(), ".jsonl")
+					fmt.Printf("  agent=%-12s session=%-30s size=%d bytes\n", entry.Name(), sessKey, size)
+				}
+			}
+			if !found {
+				fmt.Println("No sessions found.")
+			}
+			return nil
+		},
+	}
+}
+
+func sessionClearCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "clear <session-key>",
+		Short: "Clear a specific session (agent:channel_chatid format or just the filename)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			key := args[0]
+			homeDir, err := config.HomeDir()
+			if err != nil {
+				return err
+			}
+
+			agentsDir := filepath.Join(homeDir, "agents")
+			entries, err := os.ReadDir(agentsDir)
+			if err != nil {
+				return err
+			}
+
+			removed := 0
+			for _, entry := range entries {
+				if !entry.IsDir() {
+					continue
+				}
+				sessFile := filepath.Join(agentsDir, entry.Name(), "agent", "sessions", key+".jsonl")
+				if _, err := os.Stat(sessFile); err == nil {
+					os.Remove(sessFile)
+					fmt.Printf("Cleared session: %s (agent: %s)\n", key, entry.Name())
+					removed++
+				}
+			}
+			if removed == 0 {
+				return fmt.Errorf("session %q not found", key)
+			}
+			return nil
+		},
+	}
+}
+
+func sessionClearAllCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "clear-all",
+		Short: "Clear all sessions across all agents",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			homeDir, err := config.HomeDir()
+			if err != nil {
+				return err
+			}
+
+			agentsDir := filepath.Join(homeDir, "agents")
+			entries, err := os.ReadDir(agentsDir)
+			if err != nil {
+				if os.IsNotExist(err) {
+					fmt.Println("No agents found.")
+					return nil
+				}
+				return err
+			}
+
+			removed := 0
+			for _, entry := range entries {
+				if !entry.IsDir() {
+					continue
+				}
+				sessDir := filepath.Join(agentsDir, entry.Name(), "agent", "sessions")
+				sessFiles, err := os.ReadDir(sessDir)
+				if err != nil {
+					continue
+				}
+				for _, sf := range sessFiles {
+					if sf.IsDir() || !strings.HasSuffix(sf.Name(), ".jsonl") {
+						continue
+					}
+					os.Remove(filepath.Join(sessDir, sf.Name()))
+					removed++
+				}
+			}
+			fmt.Printf("Cleared %d session(s).\n", removed)
+			return nil
+		},
+	}
+}
+
+// backupCmd creates a tar.gz backup of ~/.fastclaw.
+func backupCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "backup",
+		Short: "Create a tar.gz backup of ~/.fastclaw",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			homeDir, err := config.HomeDir()
+			if err != nil {
+				return err
+			}
+
+			timestamp := time.Now().Format("20060102-150405")
+			backupFile := fmt.Sprintf("fastclaw-backup-%s.tar.gz", timestamp)
+
+			tarCmd := exec.Command("tar", "-czf", backupFile, "-C", filepath.Dir(homeDir), filepath.Base(homeDir))
+			tarCmd.Stdout = os.Stdout
+			tarCmd.Stderr = os.Stderr
+			if err := tarCmd.Run(); err != nil {
+				return fmt.Errorf("backup failed: %w", err)
+			}
+
+			cwd, _ := os.Getwd()
+			fmt.Printf("Backup created: %s\n", filepath.Join(cwd, backupFile))
+			return nil
+		},
+	}
+}
+
+// resetCmd deletes sessions and memory but keeps config.
+func resetCmd() *cobra.Command {
+	var yes bool
+	cmd := &cobra.Command{
+		Use:   "reset",
+		Short: "Delete sessions and memory (keeps config)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if !yes {
+				fmt.Print("This will delete all sessions and memory. Are you sure? (use --yes to confirm): ")
+				return fmt.Errorf("aborted: use --yes flag to confirm")
+			}
+
+			homeDir, err := config.HomeDir()
+			if err != nil {
+				return err
+			}
+
+			agentsDir := filepath.Join(homeDir, "agents")
+			entries, err := os.ReadDir(agentsDir)
+			if err != nil {
+				if os.IsNotExist(err) {
+					fmt.Println("Nothing to reset.")
+					return nil
+				}
+				return err
+			}
+
+			for _, entry := range entries {
+				if !entry.IsDir() {
+					continue
+				}
+				agentDir := filepath.Join(agentsDir, entry.Name(), "agent")
+
+				// Clear sessions
+				sessDir := filepath.Join(agentDir, "sessions")
+				os.RemoveAll(sessDir)
+				os.MkdirAll(sessDir, 0o755)
+
+				// Clear memory
+				memDir := filepath.Join(agentDir, "memory")
+				os.RemoveAll(memDir)
+				os.MkdirAll(memDir, 0o755)
+
+				// Clear MEMORY.md content but keep file
+				memFile := filepath.Join(agentDir, "MEMORY.md")
+				if _, err := os.Stat(memFile); err == nil {
+					os.WriteFile(memFile, []byte("# Memory\n\n"), 0o644)
+				}
+
+				fmt.Printf("Reset agent: %s\n", entry.Name())
+			}
+
+			fmt.Println("Reset complete.")
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&yes, "yes", false, "Skip confirmation")
+	return cmd
+}
+
 func testLLMConnection(cfg *config.Config) bool {
 	var provCfg config.ProviderConfig
 	for _, key := range []string{"default", "openai", "openrouter"} {

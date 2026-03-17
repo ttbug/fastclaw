@@ -32,6 +32,7 @@ type ContextBuilder struct {
 	memory        *Memory
 	skillsSummary string
 	groupCtx      *GroupContext
+	thinking      string // off, low, medium, high, adaptive
 }
 
 // NewContextBuilder creates a new context builder.
@@ -86,7 +87,15 @@ Messages from other bots will appear as "[BotName]: message" in the conversation
 		parts = append(parts, groupInfo)
 	}
 
-	// 6. Self-updating workspace files guidance
+	// 6. Thinking/Reasoning mode
+	if cb.thinking != "" && cb.thinking != "off" {
+		thinkingPrompt := cb.buildThinkingPrompt()
+		if thinkingPrompt != "" {
+			parts = append(parts, thinkingPrompt)
+		}
+	}
+
+	// 7. Self-updating workspace files guidance
 	parts = append(parts, `# Workspace Self-Update
 You have the ability to update workspace files to maintain knowledge over time:
 - MEMORY.md: Update when you learn important facts, user preferences, or key decisions. This file is loaded into your context every conversation.
@@ -111,6 +120,35 @@ Chat ID: %s`, now.Format("2006-01-02 15:04:05"), now.Location().String(), channe
 // SetGroupContext sets the group chat context for system prompt generation.
 func (cb *ContextBuilder) SetGroupContext(gc *GroupContext) {
 	cb.groupCtx = gc
+}
+
+// SetThinking configures the thinking/reasoning level.
+func (cb *ContextBuilder) SetThinking(level string) {
+	cb.thinking = level
+}
+
+func (cb *ContextBuilder) buildThinkingPrompt() string {
+	var depth string
+	switch cb.thinking {
+	case "low":
+		depth = "briefly reason through"
+	case "medium":
+		depth = "think step-by-step through"
+	case "high":
+		depth = "deeply and thoroughly reason through"
+	case "adaptive":
+		depth = "adaptively reason through (brief for simple tasks, deep for complex ones)"
+	default:
+		return ""
+	}
+
+	return fmt.Sprintf(`# Thinking Mode
+Before responding to each message, %s your approach internally. Consider:
+- What is the user really asking for?
+- What are the key constraints and edge cases?
+- What is the best approach and why?
+- Are there any risks or trade-offs to consider?
+Structure your reasoning before acting. Think before you respond.`, depth)
 }
 
 func (cb *ContextBuilder) loadFile(name string) string {

@@ -43,6 +43,20 @@ type StorageCfg struct {
 }
 
 
+// WebSearchCfg configures web search.
+type WebSearchCfg struct {
+	Provider string `json:"provider,omitempty"` // "brave"
+	APIKey   string `json:"apiKey,omitempty"`
+}
+
+// HooksCfg configures the webhook ingress server.
+type HooksCfg struct {
+	Enabled bool   `json:"enabled,omitempty"`
+	Token   string `json:"token,omitempty"`
+	Path    string `json:"path,omitempty"`  // default "/hooks"
+	Port    int    `json:"port,omitempty"`  // default 18954
+}
+
 // Config is the top-level configuration loaded from ~/.fastclaw/fastclaw.json.
 type Config struct {
 	Providers  map[string]ProviderConfig  `json:"providers"`
@@ -54,6 +68,8 @@ type Config struct {
 	CronJobs   []CronJob                  `json:"cronJobs,omitempty"`
 	Heartbeat  HeartbeatCfg               `json:"heartbeat,omitempty"`
 	Storage    StorageCfg                 `json:"storage,omitempty"`
+	WebSearch  WebSearchCfg               `json:"webSearch,omitempty"`
+	Hooks      HooksCfg                   `json:"hooks,omitempty"`
 }
 
 // ProviderConfig holds API credentials for an LLM provider.
@@ -74,6 +90,7 @@ type AgentDefaults struct {
 	MaxTokens         int     `json:"maxTokens"`
 	Temperature       float64 `json:"temperature"`
 	MaxToolIterations int     `json:"maxToolIterations"`
+	Thinking          string  `json:"thinking,omitempty"` // off, low, medium, high, adaptive
 }
 
 // AgentEntry is a per-agent entry in config.json agents.list.
@@ -88,12 +105,14 @@ type AgentEntry struct {
 	Tools             []string                   `json:"tools,omitempty"`
 	MCPServers        map[string]MCPServerConfig `json:"mcpServers,omitempty"`
 	AlwaysLoadSkills  []string                   `json:"alwaysLoadSkills,omitempty"`
+	Thinking          string                     `json:"thinking,omitempty"` // off, low, medium, high, adaptive
 }
 
 // ChannelConfig holds per-channel configuration with optional accounts.
 type ChannelConfig struct {
 	Enabled  bool                     `json:"enabled"`
 	BotToken string                   `json:"botToken,omitempty"`
+	AppToken string                   `json:"appToken,omitempty"` // for Slack Socket Mode
 	Accounts map[string]AccountConfig `json:"accounts,omitempty"`
 }
 
@@ -145,6 +164,7 @@ type ResolvedAgent struct {
 	MaxTokens         int
 	Temperature       float64
 	MaxToolIterations int
+	Thinking          string
 	Skills            SkillsConfig
 	MCPServers        map[string]MCPServerConfig
 }
@@ -234,6 +254,7 @@ func (cfg *Config) MergedAgentConfig(entry AgentEntry) ResolvedAgent {
 		MaxTokens:         cfg.Agents.Defaults.MaxTokens,
 		Temperature:       cfg.Agents.Defaults.Temperature,
 		MaxToolIterations: cfg.Agents.Defaults.MaxToolIterations,
+		Thinking:          cfg.Agents.Defaults.Thinking,
 	}
 
 	// Layer 2: per-agent entry overrides
@@ -248,6 +269,9 @@ func (cfg *Config) MergedAgentConfig(entry AgentEntry) ResolvedAgent {
 	}
 	if entry.MaxToolIterations > 0 {
 		resolved.MaxToolIterations = entry.MaxToolIterations
+	}
+	if entry.Thinking != "" {
+		resolved.Thinking = entry.Thinking
 	}
 
 	// Start with global MCP servers
