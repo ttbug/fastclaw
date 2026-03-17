@@ -29,6 +29,8 @@ type Agent struct {
 	temperature       float64
 	maxToolIterations int
 	workspacePath     string
+	homeDir           string
+	skillsCfg         config.SkillsConfig
 }
 
 // NewAgent creates a new Agent from a resolved config.
@@ -69,6 +71,8 @@ func NewAgent(rc config.ResolvedAgent, prov provider.Provider, mb *bus.MessageBu
 		temperature:       rc.Temperature,
 		maxToolIterations: rc.MaxToolIterations,
 		workspacePath:     rc.Workspace,
+		homeDir:           homeDir,
+		skillsCfg:         rc.Skills,
 	}
 
 	// Connect MCP servers and register their tools
@@ -256,4 +260,28 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 
 	slog.Warn("max tool iterations reached", "agent", a.name, "max", a.maxToolIterations)
 	return "I've reached the maximum number of tool iterations. Here's what I have so far."
+}
+
+// WorkspacePath returns the agent's workspace directory.
+func (a *Agent) WorkspacePath() string {
+	return a.workspacePath
+}
+
+// UpdateConfig updates the agent's runtime config (model, temperature, etc.)
+func (a *Agent) UpdateConfig(rc config.ResolvedAgent) {
+	a.model = rc.Model
+	a.maxTokens = rc.MaxTokens
+	a.temperature = rc.Temperature
+	a.maxToolIterations = rc.MaxToolIterations
+}
+
+// ReloadWorkspaceFiles re-reads workspace .md files (SOUL.md, AGENTS.md, etc.)
+// and rebuilds the context builder.
+func (a *Agent) ReloadWorkspaceFiles() {
+	a.memory = NewMemory(a.workspacePath)
+	// Rebuild skills summary
+	loader := NewSkillsLoader(a.homeDir, a.workspacePath, "", a.skillsCfg)
+	skills := loader.LoadSkills()
+	skillsSummary := loader.BuildSkillsSummary(skills)
+	a.ctxBuilder = NewContextBuilder(a.workspacePath, a.memory, skillsSummary)
 }

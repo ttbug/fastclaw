@@ -228,3 +228,9 @@ func (s *Scheduler) fireJob(job Job) {
 		PeerKind: "dm",
 	}
 }
+
+// UpdateJobs replaces the scheduler's job list (hot-reload).
+// Note: this updates the list for the next scheduling cycle.
+func (s *Scheduler) UpdateJobs(jobs []Job) {
+	s.jobs = jobs
+}

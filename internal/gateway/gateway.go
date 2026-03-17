@@ -34,6 +34,7 @@ type Gateway struct {
 	bindings     []config.Binding
 	botUsernames map[string]string          // agentID -> bot username
 	teams        map[string]config.TeamEntry // team name -> team config
+	mu           sync.RWMutex
 	dedup        sync.Map                    // dedup key -> dedupEntry
 	heartbeats   []*agent.Heartbeat
 	scheduler    *cron.Scheduler
@@ -232,6 +233,10 @@ func (g *Gateway) Run() error {
 	}()
 
 	var wg sync.WaitGroup
+
+	// Start config file watcher for hot-reload
+	wg.Add(1)
+	go g.startConfigWatcher(ctx, &wg)
 
 	// Start dedup cleanup goroutine
 	wg.Add(1)

@@ -73,3 +73,10 @@ func (m *Manager) Names() []string {
 	}
 	return names
 }
+
+// UpdateProvider replaces the LLM provider for all agents (hot-reload).
+func (m *Manager) UpdateProvider(prov provider.Provider) {
+	for _, ag := range m.agents {
+		ag.provider = prov
+	}
+}
