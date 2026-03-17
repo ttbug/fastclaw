@@ -2,15 +2,16 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { getStatus, type StatusResponse } from "@/lib/api";
 import {
   Activity,
@@ -20,8 +21,6 @@ import {
   Brain,
   RefreshCw,
   MessageSquare,
-  Clock,
-  Puzzle,
   ArrowRight,
   Settings,
 } from "lucide-react";
@@ -48,7 +47,7 @@ export default function OverviewPage() {
   if (loading && !status) {
     return (
       <div className="flex h-full items-center justify-center">
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-zinc-700 border-t-violet-500" />
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-muted border-t-primary" />
       </div>
     );
   }
@@ -58,8 +57,8 @@ export default function OverviewPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-zinc-100">Dashboard</h1>
-          <p className="text-sm text-zinc-500 mt-1">
+          <h2 className="text-2xl font-semibold tracking-tight">Dashboard</h2>
+          <p className="text-sm text-muted-foreground mt-1">
             Monitor your FastClaw gateway
           </p>
         </div>
@@ -67,7 +66,6 @@ export default function OverviewPage() {
           variant="outline"
           size="sm"
           onClick={fetchStatus}
-          className="border-zinc-700 bg-zinc-800/50 hover:bg-zinc-700 text-zinc-300"
         >
           <RefreshCw
             className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`}
@@ -78,227 +76,231 @@ export default function OverviewPage() {
 
       {/* Stats Cards */}
       <div className="grid gap-4 md:grid-cols-4">
-        <Card className="border-zinc-800 bg-zinc-900/80">
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-zinc-400">
-              Status
-            </CardTitle>
-            <Activity className="h-4 w-4 text-zinc-500" />
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center gap-2">
-              <div
-                className={`h-2.5 w-2.5 rounded-full ${
-                  status?.running
-                    ? "bg-emerald-500 animate-pulse"
-                    : "bg-zinc-600"
+        {/* Status */}
+        <div className="rounded-lg border border-border bg-card p-5">
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-sm text-muted-foreground">Status</span>
+            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-500/10">
+              <Activity className="h-4 w-4 text-emerald-500" />
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Badge
+              variant={status?.running ? "default" : "secondary"}
+              className={
+                status?.running
+                  ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 hover:bg-emerald-500/15"
+                  : ""
+              }
+            >
+              <span
+                className={`mr-1.5 inline-block h-1.5 w-1.5 rounded-full ${
+                  status?.running ? "bg-emerald-500" : "bg-muted-foreground"
                 }`}
               />
-              <span className="text-xl font-bold text-zinc-100">
-                {status?.running ? "Running" : "Stopped"}
-              </span>
+              {status?.running ? "Running" : "Stopped"}
+            </Badge>
+          </div>
+          {status?.uptime && (
+            <p className="text-xs text-muted-foreground mt-2">
+              Uptime: {status.uptime}
+            </p>
+          )}
+        </div>
+
+        {/* Agents */}
+        <div className="rounded-lg border border-border bg-card p-5">
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-sm text-muted-foreground">Agents</span>
+            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-violet-500/10">
+              <Bot className="h-4 w-4 text-violet-500" />
             </div>
-            {status?.uptime && (
-              <p className="text-xs text-zinc-500 mt-1">
-                Uptime: {status.uptime}
-              </p>
-            )}
-          </CardContent>
-        </Card>
+          </div>
+          <p className="text-3xl font-semibold tracking-tight">
+            {status?.agents?.length || 0}
+          </p>
+          <p className="text-xs text-muted-foreground mt-1">Active agents</p>
+        </div>
 
-        <Card className="border-zinc-800 bg-zinc-900/80">
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-zinc-400">
-              Agents
-            </CardTitle>
-            <Bot className="h-4 w-4 text-zinc-500" />
-          </CardHeader>
-          <CardContent>
-            <span className="text-xl font-bold text-zinc-100">
-              {status?.agents?.length || 0}
-            </span>
-            <p className="text-xs text-zinc-500 mt-1">Active agents</p>
-          </CardContent>
-        </Card>
+        {/* Channels */}
+        <div className="rounded-lg border border-border bg-card p-5">
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-sm text-muted-foreground">Channels</span>
+            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-500/10">
+              <Radio className="h-4 w-4 text-blue-500" />
+            </div>
+          </div>
+          <p className="text-3xl font-semibold tracking-tight">
+            {status?.channels?.length || 0}
+          </p>
+          <p className="text-xs text-muted-foreground mt-1">Connected</p>
+        </div>
 
-        <Card className="border-zinc-800 bg-zinc-900/80">
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-zinc-400">
-              Channels
-            </CardTitle>
-            <Radio className="h-4 w-4 text-zinc-500" />
-          </CardHeader>
-          <CardContent>
-            <span className="text-xl font-bold text-zinc-100">
-              {status?.channels?.length || 0}
-            </span>
-            <p className="text-xs text-zinc-500 mt-1">Connected</p>
-          </CardContent>
-        </Card>
-
-        <Card className="border-zinc-800 bg-zinc-900/80">
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-zinc-400">
-              Port
-            </CardTitle>
-            <Server className="h-4 w-4 text-zinc-500" />
-          </CardHeader>
-          <CardContent>
-            <span className="text-xl font-bold font-mono text-zinc-100">
-              {status?.port || "\u2014"}
-            </span>
-            <p className="text-xs text-zinc-500 mt-1">Gateway port</p>
-          </CardContent>
-        </Card>
+        {/* Port */}
+        <div className="rounded-lg border border-border bg-card p-5">
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-sm text-muted-foreground">Port</span>
+            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-amber-500/10">
+              <Server className="h-4 w-4 text-amber-500" />
+            </div>
+          </div>
+          <p className="text-3xl font-semibold tracking-tight font-mono">
+            {status?.port || "\u2014"}
+          </p>
+          <p className="text-xs text-muted-foreground mt-1">Gateway port</p>
+        </div>
       </div>
 
       {/* Quick Actions */}
       <div className="grid gap-3 md:grid-cols-3">
         <Link href="/chat/">
-          <Card className="border-zinc-800 bg-zinc-900/80 hover:border-violet-600/40 hover:bg-zinc-800/80 transition-all cursor-pointer group">
-            <CardContent className="flex items-center gap-4 p-4">
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-violet-600/10 group-hover:bg-violet-600/20 transition-colors">
-                <MessageSquare className="h-5 w-5 text-violet-400" />
-              </div>
-              <div className="flex-1">
-                <p className="text-sm font-medium text-zinc-200">Chat</p>
-                <p className="text-xs text-zinc-500">
-                  Talk to your agents
-                </p>
-              </div>
-              <ArrowRight className="h-4 w-4 text-zinc-600 group-hover:text-zinc-400 transition-colors" />
-            </CardContent>
-          </Card>
+          <div className="group flex items-center gap-4 rounded-lg border border-border bg-card p-4 transition-colors hover:bg-muted/50">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-violet-500/10 transition-colors group-hover:bg-violet-500/15">
+              <MessageSquare className="h-5 w-5 text-violet-500" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium">Chat</p>
+              <p className="text-xs text-muted-foreground">
+                Talk to your agents
+              </p>
+            </div>
+            <ArrowRight className="h-4 w-4 text-muted-foreground/50 group-hover:text-muted-foreground transition-colors" />
+          </div>
         </Link>
 
         <Link href="/agents/">
-          <Card className="border-zinc-800 bg-zinc-900/80 hover:border-violet-600/40 hover:bg-zinc-800/80 transition-all cursor-pointer group">
-            <CardContent className="flex items-center gap-4 p-4">
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-600/10 group-hover:bg-blue-600/20 transition-colors">
-                <Bot className="h-5 w-5 text-blue-400" />
-              </div>
-              <div className="flex-1">
-                <p className="text-sm font-medium text-zinc-200">Agents</p>
-                <p className="text-xs text-zinc-500">
-                  Manage agent configs
-                </p>
-              </div>
-              <ArrowRight className="h-4 w-4 text-zinc-600 group-hover:text-zinc-400 transition-colors" />
-            </CardContent>
-          </Card>
+          <div className="group flex items-center gap-4 rounded-lg border border-border bg-card p-4 transition-colors hover:bg-muted/50">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-500/10 transition-colors group-hover:bg-blue-500/15">
+              <Bot className="h-5 w-5 text-blue-500" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium">Agents</p>
+              <p className="text-xs text-muted-foreground">
+                Manage agent configs
+              </p>
+            </div>
+            <ArrowRight className="h-4 w-4 text-muted-foreground/50 group-hover:text-muted-foreground transition-colors" />
+          </div>
         </Link>
 
         <Link href="/settings/">
-          <Card className="border-zinc-800 bg-zinc-900/80 hover:border-violet-600/40 hover:bg-zinc-800/80 transition-all cursor-pointer group">
-            <CardContent className="flex items-center gap-4 p-4">
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-600/10 group-hover:bg-amber-600/20 transition-colors">
-                <Settings className="h-5 w-5 text-amber-400" />
-              </div>
-              <div className="flex-1">
-                <p className="text-sm font-medium text-zinc-200">Settings</p>
-                <p className="text-xs text-zinc-500">
-                  Gateway configuration
-                </p>
-              </div>
-              <ArrowRight className="h-4 w-4 text-zinc-600 group-hover:text-zinc-400 transition-colors" />
-            </CardContent>
-          </Card>
+          <div className="group flex items-center gap-4 rounded-lg border border-border bg-card p-4 transition-colors hover:bg-muted/50">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-500/10 transition-colors group-hover:bg-amber-500/15">
+              <Settings className="h-5 w-5 text-amber-500" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium">Settings</p>
+              <p className="text-xs text-muted-foreground">
+                Gateway configuration
+              </p>
+            </div>
+            <ArrowRight className="h-4 w-4 text-muted-foreground/50 group-hover:text-muted-foreground transition-colors" />
+          </div>
         </Link>
       </div>
 
       {/* Agents & Provider */}
       <div className="grid gap-4 md:grid-cols-2">
         {/* Agents */}
-        <Card className="border-zinc-800 bg-zinc-900/80">
-          <CardHeader>
-            <CardTitle className="text-lg flex items-center gap-2">
-              <Bot className="h-5 w-5 text-violet-400" />
-              Agents
-            </CardTitle>
-            <CardDescription className="text-zinc-500">
+        <div className="rounded-lg border border-border bg-card">
+          <div className="p-5 pb-3">
+            <div className="flex items-center gap-2 mb-1">
+              <Bot className="h-4 w-4 text-primary" />
+              <h3 className="font-medium">Agents</h3>
+            </div>
+            <p className="text-sm text-muted-foreground">
               Configured AI agents
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
+            </p>
+          </div>
+          <div className="px-2 pb-2">
             {status?.agents && status.agents.length > 0 ? (
-              <div className="space-y-2">
-                {status.agents.map((agent) => (
-                  <div
-                    key={agent.id}
-                    className="flex items-center justify-between rounded-lg border border-zinc-800 bg-zinc-800/30 p-3 hover:bg-zinc-800/50 transition-colors"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-violet-600/10">
-                        <Bot className="h-4 w-4 text-violet-400" />
-                      </div>
-                      <div>
-                        <p className="text-sm font-medium text-zinc-200">
-                          {agent.id}
-                        </p>
-                        <p className="text-xs text-zinc-500 font-mono">
+              <Table>
+                <TableHeader>
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead className="text-muted-foreground h-9">Name</TableHead>
+                    <TableHead className="text-muted-foreground h-9">Model</TableHead>
+                    <TableHead className="text-muted-foreground h-9 text-right">Status</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {status.agents.map((agent) => (
+                    <TableRow
+                      key={agent.id}
+                      className="hover:bg-muted/50 transition-colors"
+                    >
+                      <TableCell className="font-medium py-2.5">
+                        {agent.id}
+                      </TableCell>
+                      <TableCell className="py-2.5">
+                        <code className="bg-muted px-2 py-0.5 rounded font-mono text-xs">
                           {agent.model}
-                        </p>
-                      </div>
-                    </div>
-                    <Badge className="bg-emerald-600/20 text-emerald-400 border-emerald-600/30">
-                      Active
-                    </Badge>
-                  </div>
-                ))}
-              </div>
+                        </code>
+                      </TableCell>
+                      <TableCell className="text-right py-2.5">
+                        <Badge
+                          variant="outline"
+                          className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20"
+                        >
+                          Active
+                        </Badge>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
             ) : (
-              <p className="text-sm text-zinc-500">No agents configured</p>
+              <p className="text-sm text-muted-foreground px-3 pb-3">No agents configured</p>
             )}
-          </CardContent>
-        </Card>
+          </div>
+        </div>
 
         {/* Provider */}
-        <Card className="border-zinc-800 bg-zinc-900/80">
-          <CardHeader>
-            <CardTitle className="text-lg flex items-center gap-2">
-              <Brain className="h-5 w-5 text-amber-400" />
-              Provider
-            </CardTitle>
-            <CardDescription className="text-zinc-500">
+        <div className="rounded-lg border border-border bg-card">
+          <div className="p-5 pb-3">
+            <div className="flex items-center gap-2 mb-1">
+              <Brain className="h-4 w-4 text-amber-500" />
+              <h3 className="font-medium">Provider</h3>
+            </div>
+            <p className="text-sm text-muted-foreground">
               LLM provider configuration
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
+            </p>
+          </div>
+          <div className="px-5 pb-5">
             {status?.provider ? (
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
-                  <span className="text-sm text-zinc-500">Provider</span>
-                  <span className="text-sm text-zinc-200 capitalize">
+                  <span className="text-sm text-muted-foreground">Provider</span>
+                  <span className="text-sm capitalize">
                     {status.provider.name || "default"}
                   </span>
                 </div>
-                <Separator className="bg-zinc-800" />
+                <Separator />
                 <div className="flex items-center justify-between">
-                  <span className="text-sm text-zinc-500">Model</span>
-                  <span className="text-sm text-zinc-200 font-mono">
+                  <span className="text-sm text-muted-foreground">Model</span>
+                  <code className="text-sm font-mono bg-muted px-2 py-0.5 rounded">
                     {status.provider.model}
-                  </span>
+                  </code>
                 </div>
-                <Separator className="bg-zinc-800" />
+                <Separator />
                 <div className="flex items-center justify-between">
-                  <span className="text-sm text-zinc-500">API Base</span>
-                  <span className="text-sm text-zinc-200 font-mono truncate max-w-48">
+                  <span className="text-sm text-muted-foreground">API Base</span>
+                  <span className="text-sm font-mono truncate max-w-48">
                     {status.provider.apiBase}
                   </span>
                 </div>
-                <Separator className="bg-zinc-800" />
+                <Separator />
                 <div className="flex items-center justify-between">
-                  <span className="text-sm text-zinc-500">API Key</span>
-                  <span className="text-sm text-zinc-200 font-mono">
+                  <span className="text-sm text-muted-foreground">API Key</span>
+                  <span className="text-sm font-mono">
                     {status.provider.apiKey}
                   </span>
                 </div>
               </div>
             ) : (
-              <p className="text-sm text-zinc-500">No provider configured</p>
+              <p className="text-sm text-muted-foreground">No provider configured</p>
             )}
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       </div>
     </div>
   );

@@ -216,11 +216,11 @@ export default function OnboardPage() {
   if (!mounted) return null;
 
   return (
-    <div className="relative flex min-h-screen flex-col items-center justify-center bg-zinc-950 px-4 py-12">
+    <div className="relative flex min-h-screen flex-col items-center justify-center bg-background px-4 py-12">
       {showConfetti && <ConfettiEffect />}
 
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
-        <div className="absolute -top-[40%] left-1/2 h-[800px] w-[800px] -translate-x-1/2 rounded-full bg-violet-500/5 blur-3xl" />
+        <div className="absolute -top-[40%] left-1/2 h-[800px] w-[800px] -translate-x-1/2 rounded-full bg-primary/5 blur-3xl" />
       </div>
 
       <div className="relative mb-10 flex items-center gap-2">
@@ -230,10 +230,10 @@ export default function OnboardPage() {
               onClick={() => i < step && setStep(i)}
               className={`flex h-9 w-9 items-center justify-center rounded-full text-sm font-medium transition-all duration-300 ${
                 i === step
-                  ? "bg-violet-600 text-white shadow-lg shadow-violet-500/25 scale-110"
+                  ? "bg-primary text-primary-foreground shadow-lg shadow-primary/25 scale-110"
                   : i < step
-                    ? "bg-violet-600/20 text-violet-400 hover:bg-violet-600/30 cursor-pointer"
-                    : "bg-zinc-800 text-zinc-500"
+                    ? "bg-primary/20 text-primary hover:bg-primary/30 cursor-pointer"
+                    : "bg-muted text-muted-foreground"
               }`}
               disabled={i > step}
             >
@@ -258,7 +258,7 @@ export default function OnboardPage() {
             {i < STEP_LABELS.length - 1 && (
               <div
                 className={`hidden h-px w-8 sm:block ${
-                  i < step ? "bg-violet-600/40" : "bg-zinc-800"
+                  i < step ? "bg-primary/40" : "bg-border"
                 }`}
               />
             )}
@@ -266,13 +266,13 @@ export default function OnboardPage() {
         ))}
       </div>
 
-      <p className="relative mb-6 text-sm font-medium tracking-wide text-zinc-500 uppercase">
+      <p className="relative mb-6 text-sm font-medium tracking-wide text-muted-foreground uppercase">
         {STEP_LABELS[step]}
       </p>
 
       <div className="relative w-full max-w-lg animate-fade-in-up" key={step}>
         {step === 0 && (
-          <Card className="border-zinc-800 bg-zinc-900/80 backdrop-blur-sm">
+          <Card className="backdrop-blur-sm">
             <CardHeader className="space-y-6 pb-4 text-center">
               <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-violet-600 to-cyan-500 shadow-lg shadow-violet-500/20">
                 <svg
@@ -295,34 +295,34 @@ export default function OnboardPage() {
                     FastClaw
                   </span>
                 </CardTitle>
-                <CardDescription className="mt-3 text-base text-zinc-400">
+                <CardDescription className="mt-3 text-base">
                   AI Agent Framework
                 </CardDescription>
               </div>
             </CardHeader>
             <CardContent className="space-y-6 text-center">
-              <p className="text-sm leading-relaxed text-zinc-400">
+              <p className="text-sm leading-relaxed text-muted-foreground">
                 Set up your AI agent in a few simple steps. Configure your LLM
                 provider, connect messaging channels, and launch your agent.
               </p>
-              <Separator className="bg-zinc-800" />
+              <Separator />
               <div className="grid grid-cols-3 gap-4 text-center">
                 <div>
-                  <p className="text-2xl font-bold text-violet-400">6+</p>
-                  <p className="text-xs text-zinc-500">LLM Providers</p>
+                  <p className="text-2xl font-bold text-violet-500">6+</p>
+                  <p className="text-xs text-muted-foreground">LLM Providers</p>
                 </div>
                 <div>
-                  <p className="text-2xl font-bold text-cyan-400">Multi</p>
-                  <p className="text-xs text-zinc-500">Agent Support</p>
+                  <p className="text-2xl font-bold text-cyan-500">Multi</p>
+                  <p className="text-xs text-muted-foreground">Agent Support</p>
                 </div>
                 <div>
-                  <p className="text-2xl font-bold text-emerald-400">MCP</p>
-                  <p className="text-xs text-zinc-500">Tool Protocol</p>
+                  <p className="text-2xl font-bold text-emerald-500">MCP</p>
+                  <p className="text-xs text-muted-foreground">Tool Protocol</p>
                 </div>
               </div>
               <Button
                 onClick={() => setStep(1)}
-                className="w-full bg-violet-600 text-white hover:bg-violet-700 transition-colors"
+                className="w-full"
                 size="lg"
               >
                 Get Started
@@ -345,24 +345,24 @@ export default function OnboardPage() {
         )}
 
         {step === 1 && (
-          <Card className="border-zinc-800 bg-zinc-900/80 backdrop-blur-sm">
+          <Card className="backdrop-blur-sm">
             <CardHeader>
               <CardTitle className="text-xl">LLM Provider</CardTitle>
-              <CardDescription className="text-zinc-400">
+              <CardDescription>
                 Choose your AI model provider and configure the connection.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-5">
               <div className="space-y-2">
-                <Label className="text-zinc-300">Provider</Label>
+                <Label>Provider</Label>
                 <Select
                   value={config.provider}
                   onValueChange={handleProviderChange}
                 >
-                  <SelectTrigger className="border-zinc-700 bg-zinc-800/50">
+                  <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
-                  <SelectContent className="border-zinc-700 bg-zinc-800">
+                  <SelectContent>
                     {Object.keys(PROVIDERS).map((p) => (
                       <SelectItem key={p} value={p}>
                         <span className="capitalize">{p}</span>
@@ -373,17 +373,17 @@ export default function OnboardPage() {
               </div>
 
               <div className="space-y-2">
-                <Label className="text-zinc-300">API Base URL</Label>
+                <Label>API Base URL</Label>
                 <Input
                   value={config.apiBase}
                   onChange={(e) => updateConfig({ apiBase: e.target.value })}
                   placeholder="https://api.openai.com/v1"
-                  className="border-zinc-700 bg-zinc-800/50 font-mono text-sm"
+                  className="font-mono text-sm"
                 />
               </div>
 
               <div className="space-y-2">
-                <Label className="text-zinc-300">API Key</Label>
+                <Label>API Key</Label>
                 <Input
                   type="password"
                   value={config.apiKey}
@@ -393,21 +393,21 @@ export default function OnboardPage() {
                       ? "Not required for Ollama"
                       : "sk-..."
                   }
-                  className="border-zinc-700 bg-zinc-800/50 font-mono text-sm"
+                  className="font-mono text-sm"
                 />
               </div>
 
               <div className="space-y-2">
-                <Label className="text-zinc-300">Model</Label>
+                <Label>Model</Label>
                 {PROVIDERS[config.provider]?.models.length > 0 ? (
                   <Select
                     value={config.model}
                     onValueChange={(v: string | null) => v && updateConfig({ model: v })}
                   >
-                    <SelectTrigger className="border-zinc-700 bg-zinc-800/50">
+                    <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
-                    <SelectContent className="border-zinc-700 bg-zinc-800">
+                    <SelectContent>
                       {PROVIDERS[config.provider].models.map((m) => (
                         <SelectItem key={m} value={m}>
                           {m}
@@ -420,19 +420,18 @@ export default function OnboardPage() {
                     value={config.model}
                     onChange={(e) => updateConfig({ model: e.target.value })}
                     placeholder="Enter model name"
-                    className="border-zinc-700 bg-zinc-800/50 font-mono text-sm"
+                    className="font-mono text-sm"
                   />
                 )}
               </div>
 
-              <Separator className="bg-zinc-800" />
+              <Separator />
 
               <div className="flex items-center gap-3">
                 <Button
                   variant="outline"
                   onClick={handleTestConnection}
                   disabled={testStatus === "testing"}
-                  className="border-zinc-700 bg-zinc-800/50 hover:bg-zinc-700"
                 >
                   {testStatus === "testing" ? (
                     <>
@@ -462,12 +461,18 @@ export default function OnboardPage() {
                   )}
                 </Button>
                 {testStatus === "success" && (
-                  <Badge className="bg-emerald-600/20 text-emerald-400 border-emerald-600/30">
+                  <Badge
+                    variant="outline"
+                    className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20"
+                  >
                     Connected
                   </Badge>
                 )}
                 {testStatus === "error" && (
-                  <Badge className="bg-red-600/20 text-red-400 border-red-600/30">
+                  <Badge
+                    variant="outline"
+                    className="bg-destructive/10 text-destructive border-destructive/20"
+                  >
                     {testError || "Failed"}
                   </Badge>
                 )}
@@ -483,20 +488,20 @@ export default function OnboardPage() {
         )}
 
         {step === 2 && (
-          <Card className="border-zinc-800 bg-zinc-900/80 backdrop-blur-sm">
+          <Card className="backdrop-blur-sm">
             <CardHeader>
               <CardTitle className="text-xl">Channels</CardTitle>
-              <CardDescription className="text-zinc-400">
+              <CardDescription>
                 Connect messaging platforms to your agent.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-5">
-              <div className="rounded-lg border border-zinc-800 bg-zinc-800/30 p-4">
+              <div className="rounded-lg border border-border bg-muted/30 p-4">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-500/10">
                       <svg
-                        className="h-5 w-5 text-blue-400"
+                        className="h-5 w-5 text-blue-500"
                         viewBox="0 0 24 24"
                         fill="currentColor"
                       >
@@ -504,17 +509,18 @@ export default function OnboardPage() {
                       </svg>
                     </div>
                     <div>
-                      <p className="font-medium text-zinc-200">Telegram</p>
-                      <p className="text-xs text-zinc-500">
+                      <p className="font-medium">Telegram</p>
+                      <p className="text-xs text-muted-foreground">
                         Connect via Bot API
                       </p>
                     </div>
                   </div>
                   <Badge
+                    variant="outline"
                     className={
                       config.telegramEnabled
-                        ? "bg-emerald-600/20 text-emerald-400 border-emerald-600/30"
-                        : "bg-zinc-700/50 text-zinc-500 border-zinc-600/30"
+                        ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20"
+                        : ""
                     }
                   >
                     {config.telegramEnabled ? "Enabled" : "Disabled"}
@@ -523,7 +529,7 @@ export default function OnboardPage() {
 
                 {config.telegramEnabled && (
                   <div className="mt-4 space-y-2">
-                    <Label className="text-zinc-300">Bot Token</Label>
+                    <Label>Bot Token</Label>
                     <Input
                       type="password"
                       value={config.telegramToken}
@@ -531,22 +537,22 @@ export default function OnboardPage() {
                         updateConfig({ telegramToken: e.target.value })
                       }
                       placeholder="123456789:ABCdefGHIjklMNOpqrsTUVwxyz"
-                      className="border-zinc-700 bg-zinc-800/50 font-mono text-sm"
+                      className="font-mono text-sm"
                     />
-                    <p className="text-xs text-zinc-500">
+                    <p className="text-xs text-muted-foreground">
                       Get a token from{" "}
-                      <span className="text-violet-400">@BotFather</span> on
+                      <span className="text-primary">@BotFather</span> on
                       Telegram
                     </p>
                   </div>
                 )}
               </div>
 
-              <div className="rounded-lg border border-zinc-800/50 bg-zinc-800/10 p-4 opacity-50">
+              <div className="rounded-lg border border-border/50 bg-muted/10 p-4 opacity-50">
                 <div className="flex items-center gap-3">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-zinc-800">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-muted">
                     <svg
-                      className="h-5 w-5 text-zinc-500"
+                      className="h-5 w-5 text-muted-foreground"
                       fill="none"
                       viewBox="0 0 24 24"
                       stroke="currentColor"
@@ -560,8 +566,8 @@ export default function OnboardPage() {
                     </svg>
                   </div>
                   <div>
-                    <p className="font-medium text-zinc-500">More Channels</p>
-                    <p className="text-xs text-zinc-600">
+                    <p className="font-medium text-muted-foreground">More Channels</p>
+                    <p className="text-xs text-muted-foreground/60">
                       Discord, Slack, WhatsApp -- coming soon
                     </p>
                   </div>
@@ -578,42 +584,41 @@ export default function OnboardPage() {
         )}
 
         {step === 3 && (
-          <Card className="border-zinc-800 bg-zinc-900/80 backdrop-blur-sm">
+          <Card className="backdrop-blur-sm">
             <CardHeader>
               <CardTitle className="text-xl">Gateway Settings</CardTitle>
-              <CardDescription className="text-zinc-400">
+              <CardDescription>
                 Configure your agent identity and server settings.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-5">
               <div className="space-y-2">
-                <Label className="text-zinc-300">Agent Name</Label>
+                <Label>Agent Name</Label>
                 <Input
                   value={config.agentName}
                   onChange={(e) =>
                     updateConfig({ agentName: e.target.value })
                   }
                   placeholder="My AI Agent"
-                  className="border-zinc-700 bg-zinc-800/50"
                 />
               </div>
 
               <div className="space-y-2">
-                <Label className="text-zinc-300">Port</Label>
+                <Label>Port</Label>
                 <Input
                   type="number"
                   value={config.port}
                   onChange={(e) =>
                     updateConfig({ port: parseInt(e.target.value) || 18953 })
                   }
-                  className="border-zinc-700 bg-zinc-800/50 font-mono"
+                  className="font-mono"
                 />
               </div>
 
               <div className="space-y-2">
-                <Label className="text-zinc-300">
+                <Label>
                   Personality{" "}
-                  <span className="text-xs text-zinc-500">(SOUL.md)</span>
+                  <span className="text-xs text-muted-foreground">(SOUL.md)</span>
                 </Label>
                 <Textarea
                   value={config.personality}
@@ -622,9 +627,9 @@ export default function OnboardPage() {
                   }
                   rows={5}
                   placeholder="Describe your agent's personality, tone, and behavior..."
-                  className="border-zinc-700 bg-zinc-800/50 text-sm text-zinc-200 placeholder:text-zinc-500 resize-none"
+                  className="text-sm resize-none"
                 />
-                <p className="text-xs text-zinc-500">
+                <p className="text-xs text-muted-foreground">
                   This defines how your agent communicates and behaves.
                 </p>
               </div>
@@ -639,12 +644,12 @@ export default function OnboardPage() {
         )}
 
         {step === 4 && (
-          <Card className="border-zinc-800 bg-zinc-900/80 backdrop-blur-sm animate-pulse-glow">
+          <Card className="backdrop-blur-sm animate-pulse-glow">
             <CardHeader>
               <CardTitle className="text-xl">
                 {launched ? "You're All Set!" : "Review & Launch"}
               </CardTitle>
-              <CardDescription className="text-zinc-400">
+              <CardDescription>
                 {launched
                   ? "FastClaw is now configured and ready to go."
                   : "Review your configuration before launching."}
@@ -655,7 +660,7 @@ export default function OnboardPage() {
                 <div className="space-y-4 text-center py-4">
                   <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-emerald-500/20">
                     <svg
-                      className="h-8 w-8 text-emerald-400"
+                      className="h-8 w-8 text-emerald-500"
                       fill="none"
                       viewBox="0 0 24 24"
                       stroke="currentColor"
@@ -668,10 +673,10 @@ export default function OnboardPage() {
                       />
                     </svg>
                   </div>
-                  <p className="text-lg font-medium text-zinc-200">
+                  <p className="text-lg font-medium">
                     Configuration saved successfully
                   </p>
-                  <p className="text-sm text-zinc-400">
+                  <p className="text-sm text-muted-foreground">
                     Redirecting to dashboard...
                   </p>
                 </div>
@@ -689,7 +694,7 @@ export default function OnboardPage() {
                       label="API Key"
                       value={config.apiKey ? "********" : "Not set"}
                     />
-                    <Separator className="bg-zinc-800" />
+                    <Separator />
                     <SummaryRow
                       label="Telegram"
                       value={
@@ -700,7 +705,7 @@ export default function OnboardPage() {
                           : "Disabled"
                       }
                     />
-                    <Separator className="bg-zinc-800" />
+                    <Separator />
                     <SummaryRow label="Agent Name" value={config.agentName} />
                     <SummaryRow
                       label="Port"
@@ -711,7 +716,7 @@ export default function OnboardPage() {
 
                   <button
                     onClick={() => setJsonExpanded(!jsonExpanded)}
-                    className="flex w-full items-center justify-between rounded-lg border border-zinc-800 bg-zinc-800/30 px-4 py-2.5 text-sm text-zinc-400 transition-colors hover:bg-zinc-800/50"
+                    className="flex w-full items-center justify-between rounded-lg border border-border bg-muted/30 px-4 py-2.5 text-sm text-muted-foreground transition-colors hover:bg-muted/50"
                   >
                     <span>JSON Preview</span>
                     <svg
@@ -729,7 +734,7 @@ export default function OnboardPage() {
                     </svg>
                   </button>
                   {jsonExpanded && (
-                    <pre className="max-h-64 overflow-auto rounded-lg border border-zinc-800 bg-zinc-950 p-4 font-mono text-xs text-zinc-400">
+                    <pre className="max-h-64 overflow-auto rounded-lg border border-border bg-background p-4 font-mono text-xs text-muted-foreground">
                       {JSON.stringify(config, null, 2)}
                     </pre>
                   )}
@@ -768,7 +773,7 @@ export default function OnboardPage() {
         )}
       </div>
 
-      <p className="relative mt-8 text-xs text-zinc-600">
+      <p className="relative mt-8 text-xs text-muted-foreground/50">
         FastClaw Agent Framework
       </p>
     </div>
@@ -788,9 +793,9 @@ function SummaryRow({
 }) {
   return (
     <div className="flex items-center justify-between">
-      <span className="text-sm text-zinc-500">{label}</span>
+      <span className="text-sm text-muted-foreground">{label}</span>
       <span
-        className={`text-sm text-zinc-200 ${mono ? "font-mono" : ""} ${capitalize ? "capitalize" : ""}`}
+        className={`text-sm ${mono ? "font-mono" : ""} ${capitalize ? "capitalize" : ""}`}
       >
         {value}
       </span>
@@ -815,7 +820,6 @@ function NavigationButtons({
         variant="ghost"
         onClick={() => setStep(step - 1)}
         disabled={step === 0}
-        className="text-zinc-400 hover:text-zinc-200"
       >
         <svg
           className="mr-1 h-4 w-4"
@@ -836,7 +840,6 @@ function NavigationButtons({
         <Button
           onClick={() => setStep(step + 1)}
           disabled={!canProceed}
-          className="bg-violet-600 text-white hover:bg-violet-700"
         >
           Next
           <svg

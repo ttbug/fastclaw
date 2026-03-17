@@ -1,13 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -52,15 +45,12 @@ export default function SkillsPage() {
     <div className="p-6 space-y-6 max-w-5xl mx-auto">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-zinc-100">Skills</h1>
-          <p className="text-sm text-zinc-500 mt-1">
+          <h2 className="text-2xl font-semibold tracking-tight">Skills</h2>
+          <p className="text-sm text-muted-foreground mt-1">
             Installed skills that agents can use
           </p>
         </div>
-        <Button
-          variant="outline"
-          className="border-zinc-700 bg-zinc-800/50 hover:bg-zinc-700 text-zinc-300"
-        >
+        <Button variant="outline">
           <Download className="h-4 w-4 mr-2" />
           Install Skill
         </Button>
@@ -69,83 +59,80 @@ export default function SkillsPage() {
       {loading ? (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {[1, 2, 3].map((i) => (
-            <Skeleton key={i} className="h-40 bg-zinc-800" />
+            <Skeleton key={i} className="h-40" />
           ))}
         </div>
       ) : skills.length === 0 ? (
-        <Card className="border-zinc-800 bg-zinc-900/80">
-          <CardContent className="flex flex-col items-center justify-center py-16">
-            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-violet-600/10 mb-4">
-              <Sparkles className="h-7 w-7 text-violet-400" />
+        <div className="rounded-lg border border-border bg-card">
+          <div className="flex flex-col items-center justify-center py-16">
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 mb-4">
+              <Sparkles className="h-7 w-7 text-primary" />
             </div>
-            <p className="text-sm text-zinc-400 mb-1">No skills installed</p>
-            <p className="text-xs text-zinc-600">
+            <p className="text-sm text-muted-foreground mb-1">No skills installed</p>
+            <p className="text-xs text-muted-foreground/60">
               Skills extend agent capabilities with specialized behaviors
             </p>
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       ) : (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {skills.map((skill) => (
-            <Card
+            <div
               key={skill.name}
-              className="border-zinc-800 bg-zinc-900/80 hover:border-zinc-700 transition-colors group"
+              className="group rounded-lg border border-border bg-card p-5 transition-colors hover:bg-muted/50"
             >
-              <CardHeader className="pb-3">
-                <div className="flex items-start justify-between">
-                  <div className="flex items-center gap-2.5">
-                    <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-violet-600/10">
-                      <Sparkles className="h-4 w-4 text-violet-400" />
-                    </div>
-                    <div>
-                      <CardTitle className="text-sm font-medium text-zinc-200">
-                        {skill.name}
-                      </CardTitle>
-                      <Badge
-                        variant="outline"
-                        className="mt-1 text-[10px] border-zinc-700 text-zinc-500"
-                      >
-                        {skill.type || "skill"}
-                      </Badge>
-                    </div>
+              <div className="flex items-start justify-between mb-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10">
+                    <Sparkles className="h-4 w-4 text-primary" />
                   </div>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7 text-zinc-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
-                    onClick={() => setDeleteTarget(skill.name)}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
+                  <div>
+                    <p className="text-sm font-medium">{skill.name}</p>
+                    <Badge
+                      variant="outline"
+                      className="mt-1 text-[10px]"
+                    >
+                      {skill.type || "skill"}
+                    </Badge>
+                  </div>
                 </div>
-              </CardHeader>
-              <CardContent>
-                <CardDescription className="text-zinc-500 text-sm line-clamp-2 mb-3">
-                  {skill.description || "No description"}
-                </CardDescription>
-                <div className="flex items-center gap-1.5 text-zinc-600">
-                  <FolderOpen className="h-3 w-3" />
-                  <span className="text-[11px] font-mono truncate">
-                    {skill.location}
-                  </span>
-                </div>
-              </CardContent>
-            </Card>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity"
+                  onClick={() => setDeleteTarget(skill.name)}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+              <p className="text-sm text-muted-foreground line-clamp-2 mb-3">
+                {skill.description || "No description"}
+              </p>
+              <div className="flex items-center gap-1.5 text-muted-foreground/60">
+                <FolderOpen className="h-3 w-3" />
+                <span className="text-[11px] font-mono truncate">
+                  {skill.location}
+                </span>
+              </div>
+            </div>
           ))}
         </div>
       )}
 
       <AlertDialog open={!!deleteTarget} onOpenChange={() => setDeleteTarget(null)}>
-        <AlertDialogContent className="bg-zinc-900 border-zinc-800">
+        <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle className="text-zinc-200">Remove Skill</AlertDialogTitle>
-            <AlertDialogDescription className="text-zinc-500">
-              Remove <strong className="text-zinc-300">{deleteTarget}</strong> from installed skills?
+            <AlertDialogTitle>Remove Skill</AlertDialogTitle>
+            <AlertDialogDescription>
+              Remove <strong>{deleteTarget}</strong> from installed skills?
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel className="border-zinc-700 text-zinc-400">Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDelete} className="bg-red-600 hover:bg-red-700 text-white">
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDelete}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
               Remove
             </AlertDialogAction>
           </AlertDialogFooter>

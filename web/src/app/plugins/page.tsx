@@ -1,13 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
@@ -77,165 +70,143 @@ export default function PluginsPage() {
   };
 
   const statusColor = (status: string) => {
-    if (status === "running") return "bg-emerald-600/20 text-emerald-400 border-emerald-600/30";
-    if (status === "stopped") return "bg-zinc-600/20 text-zinc-400 border-zinc-600/30";
-    return "bg-amber-600/20 text-amber-400 border-amber-600/30";
+    if (status === "running") return "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20";
+    if (status === "stopped") return "bg-muted text-muted-foreground border-border";
+    return "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20";
   };
 
   const typeColor = (type: string) => {
     const colors: Record<string, string> = {
-      channel: "bg-blue-600/20 text-blue-400 border-blue-600/30",
-      tool: "bg-violet-600/20 text-violet-400 border-violet-600/30",
-      provider: "bg-amber-600/20 text-amber-400 border-amber-600/30",
-      hook: "bg-cyan-600/20 text-cyan-400 border-cyan-600/30",
+      channel: "bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20",
+      tool: "bg-violet-500/10 text-violet-600 dark:text-violet-400 border-violet-500/20",
+      provider: "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20",
+      hook: "bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 border-cyan-500/20",
     };
-    return colors[type] || "bg-zinc-600/20 text-zinc-400 border-zinc-600/30";
+    return colors[type] || "bg-muted text-muted-foreground border-border";
   };
 
   return (
     <div className="p-6 space-y-6 max-w-5xl mx-auto">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-zinc-100">Plugins</h1>
-          <p className="text-sm text-zinc-500 mt-1">
+          <h2 className="text-2xl font-semibold tracking-tight">Plugins</h2>
+          <p className="text-sm text-muted-foreground mt-1">
             Extend FastClaw with custom plugins
           </p>
         </div>
-        <Button
-          variant="outline"
-          className="border-zinc-700 bg-zinc-800/50 hover:bg-zinc-700 text-zinc-300"
-        >
+        <Button variant="outline">
           <Download className="h-4 w-4 mr-2" />
           Install Plugin
         </Button>
       </div>
 
-      <Card className="border-zinc-800 bg-zinc-900/80">
-        <CardHeader>
-          <CardTitle className="text-lg flex items-center gap-2">
-            <Puzzle className="h-5 w-5 text-violet-400" />
-            Installed Plugins
-          </CardTitle>
-          <CardDescription className="text-zinc-500">
-            {plugins.length} plugin{plugins.length !== 1 ? "s" : ""} installed
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {loading ? (
-            <div className="space-y-3">
-              {[1, 2].map((i) => (
-                <Skeleton key={i} className="h-14 w-full bg-zinc-800" />
-              ))}
+      <div className="rounded-lg border border-border bg-card">
+        {loading ? (
+          <div className="p-6 space-y-3">
+            {[1, 2].map((i) => (
+              <Skeleton key={i} className="h-14 w-full" />
+            ))}
+          </div>
+        ) : plugins.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-16 text-center">
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 mb-4">
+              <Puzzle className="h-7 w-7 text-primary" />
             </div>
-          ) : plugins.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-12 text-center">
-              <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-violet-600/10 mb-4">
-                <Puzzle className="h-7 w-7 text-violet-400" />
-              </div>
-              <p className="text-sm text-zinc-400">No plugins installed</p>
-              <p className="text-xs text-zinc-600 mt-1">
-                Plugins add channels, tools, and providers
-              </p>
-            </div>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow className="border-zinc-800 hover:bg-transparent">
-                  <TableHead className="text-zinc-500">Plugin</TableHead>
-                  <TableHead className="text-zinc-500">Type</TableHead>
-                  <TableHead className="text-zinc-500">Version</TableHead>
-                  <TableHead className="text-zinc-500">Status</TableHead>
-                  <TableHead className="text-zinc-500">Enabled</TableHead>
-                  <TableHead className="text-zinc-500 text-right">Config</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {plugins.map((plugin) => (
-                  <TableRow
-                    key={plugin.id}
-                    className="border-zinc-800 hover:bg-zinc-800/50 transition-colors"
-                  >
-                    <TableCell>
-                      <div className="flex items-center gap-3">
-                        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-violet-600/10">
-                          <Puzzle className="h-4 w-4 text-violet-400" />
-                        </div>
-                        <span className="font-medium text-zinc-200">{plugin.id}</span>
+            <p className="text-sm text-muted-foreground">No plugins installed</p>
+            <p className="text-xs text-muted-foreground/60 mt-1">
+              Plugins add channels, tools, and providers
+            </p>
+          </div>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead>Plugin</TableHead>
+                <TableHead>Type</TableHead>
+                <TableHead>Version</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Enabled</TableHead>
+                <TableHead className="text-right">Config</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {plugins.map((plugin) => (
+                <TableRow
+                  key={plugin.id}
+                  className="hover:bg-muted/50 transition-colors"
+                >
+                  <TableCell>
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10">
+                        <Puzzle className="h-4 w-4 text-primary" />
                       </div>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="outline" className={typeColor(plugin.type)}>
-                        {plugin.type}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <span className="font-mono text-sm text-zinc-500">
-                        {plugin.version || "-"}
-                      </span>
-                    </TableCell>
-                    <TableCell>
-                      <Badge className={statusColor(plugin.status)}>
-                        {plugin.status}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <Switch
-                        checked={plugin.enabled}
-                        onCheckedChange={() => handleToggle(plugin)}
-                      />
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 text-zinc-500 hover:text-zinc-200"
-                        onClick={() => handleOpenConfig(plugin)}
-                      >
-                        <Settings className="h-3.5 w-3.5" />
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
+                      <span className="font-medium">{plugin.id}</span>
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant="outline" className={typeColor(plugin.type)}>
+                      {plugin.type}
+                    </Badge>
+                  </TableCell>
+                  <TableCell>
+                    <code className="font-mono text-xs text-muted-foreground">
+                      {plugin.version || "-"}
+                    </code>
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant="outline" className={statusColor(plugin.status)}>
+                      {plugin.status}
+                    </Badge>
+                  </TableCell>
+                  <TableCell>
+                    <Switch
+                      checked={plugin.enabled}
+                      onCheckedChange={() => handleToggle(plugin)}
+                    />
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                      onClick={() => handleOpenConfig(plugin)}
+                    >
+                      <Settings className="h-3.5 w-3.5" />
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </div>
 
       {/* Config Editor Dialog */}
       <Dialog open={!!editPlugin} onOpenChange={() => setEditPlugin(null)}>
-        <DialogContent className="bg-zinc-900 border-zinc-800 text-zinc-200 max-w-2xl">
+        <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <Puzzle className="h-5 w-5 text-violet-400" />
+              <Puzzle className="h-5 w-5 text-primary" />
               {editPlugin?.id} Configuration
             </DialogTitle>
-            <DialogDescription className="text-zinc-500">
+            <DialogDescription>
               Edit plugin configuration as JSON
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
-            <Label className="text-zinc-400">Config JSON</Label>
+            <Label>Config JSON</Label>
             <Textarea
               value={configJson}
               onChange={(e) => setConfigJson(e.target.value)}
               rows={12}
-              className="border-zinc-700 bg-zinc-800/50 text-zinc-200 font-mono text-sm resize-none"
+              className="font-mono text-sm resize-none"
             />
           </div>
           <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setEditPlugin(null)}
-              className="border-zinc-700 text-zinc-400"
-            >
+            <Button variant="outline" onClick={() => setEditPlugin(null)}>
               Cancel
             </Button>
-            <Button
-              onClick={handleSaveConfig}
-              disabled={saving}
-              className="bg-violet-600 hover:bg-violet-700 text-white"
-            >
+            <Button onClick={handleSaveConfig} disabled={saving}>
               {saving ? "Saving..." : "Save Config"}
             </Button>
           </DialogFooter>
