@@ -56,9 +56,33 @@ func (s *Server) Run(ctx context.Context) error {
 	// API routes
 	mux.HandleFunc("GET /api/status", s.handleStatus)
 	mux.HandleFunc("GET /api/config", s.handleGetConfig)
+	mux.HandleFunc("POST /api/config", s.handleUpdateConfig)
 	mux.HandleFunc("POST /api/test-provider", s.handleTestProvider)
 	mux.HandleFunc("POST /api/save-config", s.handleSaveConfig)
 	mux.HandleFunc("POST /api/chat", s.handleChat)
+
+	// Agent management
+	mux.HandleFunc("GET /api/agents", s.handleListAgents)
+	mux.HandleFunc("POST /api/agents", s.handleCreateAgent)
+	mux.HandleFunc("PUT /api/agents/{id}", s.handleUpdateAgent)
+	mux.HandleFunc("DELETE /api/agents/{id}", s.handleDeleteAgent)
+
+	// Skills
+	mux.HandleFunc("GET /api/skills", s.handleListSkills)
+	mux.HandleFunc("DELETE /api/skills/{name}", s.handleDeleteSkill)
+
+	// Plugins
+	mux.HandleFunc("GET /api/plugins", s.handleListPlugins)
+	mux.HandleFunc("PUT /api/plugins/{id}", s.handleUpdatePlugin)
+
+	// Channels
+	mux.HandleFunc("GET /api/channels", s.handleListChannels)
+
+	// Cron jobs
+	mux.HandleFunc("GET /api/cron", s.handleListCronJobs)
+	mux.HandleFunc("POST /api/cron", s.handleCreateCronJob)
+	mux.HandleFunc("PUT /api/cron/{id}", s.handleUpdateCronJob)
+	mux.HandleFunc("DELETE /api/cron/{id}", s.handleDeleteCronJob)
 
 	// Static files from embedded web/out
 	webRoot, err := fs.Sub(webFS, "web")
@@ -505,4 +529,561 @@ func formatDuration(d time.Duration) string {
 	days := hours / 24
 	hours = hours % 24
 	return fmt.Sprintf("%dd %dh", days, hours)
+}
+
+// --- Agent Management ---
+
+func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
+	cfg, err := config.Load()
+	if err != nil {
+		jsonResponse(w, http.StatusOK, []any{})
+		return
+	}
+	resolved := config.ResolveAgents(cfg)
+	var agents []map[string]any
+	for _, ra := range resolved {
+		soul := ""
+		soulPath := filepath.Join(ra.Workspace, "SOUL.md")
+		if data, readErr := os.ReadFile(soulPath); readErr == nil {
+			soul = string(data)
+		}
+		agents = append(agents, map[string]any{
+			"id":                ra.ID,
+			"model":             ra.Model,
+			"workspace":         ra.Workspace,
+			"maxTokens":         ra.MaxTokens,
+			"temperature":       ra.Temperature,
+			"maxToolIterations": ra.MaxToolIterations,
+			"thinking":          ra.Thinking,
+			"soul":              soul,
+		})
+	}
+	if agents == nil {
+		agents = []map[string]any{}
+	}
+	jsonResponse(w, http.StatusOK, agents)
+}
+
+func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID    string `json:"id"`
+		Model string `json:"model"`
+		Soul  string `json:"soul"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "invalid request"})
+		return
+	}
+	if req.ID == "" {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "id is required"})
+		return
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+
+	// Add agent to config
+	cfg.Agents.List = append(cfg.Agents.List, config.AgentEntry{
+		ID:    req.ID,
+		Model: req.Model,
+	})
+
+	if err := saveConfigFile(cfg); err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+
+	// Create workspace
+	homeDir, _ := config.HomeDir()
+	agentDir := filepath.Join(homeDir, "agents", req.ID, "agent")
+	for _, dir := range []string{agentDir, filepath.Join(agentDir, "memory"), filepath.Join(agentDir, "sessions"), filepath.Join(agentDir, "skills")} {
+		os.MkdirAll(dir, 0o755)
+	}
+	if req.Soul != "" {
+		os.WriteFile(filepath.Join(agentDir, "SOUL.md"), []byte(req.Soul), 0o644)
+	}
+	agentCfg := config.AgentFileConfig{Model: req.Model}
+	agentData, _ := json.MarshalIndent(agentCfg, "", "  ")
+	os.WriteFile(filepath.Join(agentDir, "agent.json"), agentData, 0o644)
+
+	jsonResponse(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var req struct {
+		Model string `json:"model"`
+		Soul  string `json:"soul"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "invalid request"})
+		return
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+
+	found := false
+	for i, entry := range cfg.Agents.List {
+		if entry.ID == id {
+			if req.Model != "" {
+				cfg.Agents.List[i].Model = req.Model
+			}
+			found = true
+			break
+		}
+	}
+	if !found {
+		jsonResponse(w, http.StatusNotFound, map[string]any{"ok": false, "error": "agent not found"})
+		return
+	}
+
+	if err := saveConfigFile(cfg); err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+
+	// Update workspace files
+	homeDir, _ := config.HomeDir()
+	agentDir := filepath.Join(homeDir, "agents", id, "agent")
+	if req.Soul != "" {
+		os.WriteFile(filepath.Join(agentDir, "SOUL.md"), []byte(req.Soul), 0o644)
+	}
+	if req.Model != "" {
+		agentCfg := config.AgentFileConfig{Model: req.Model}
+		agentData, _ := json.MarshalIndent(agentCfg, "", "  ")
+		os.WriteFile(filepath.Join(agentDir, "agent.json"), agentData, 0o644)
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	cfg, err := config.Load()
+	if err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+
+	newList := make([]config.AgentEntry, 0, len(cfg.Agents.List))
+	for _, entry := range cfg.Agents.List {
+		if entry.ID != id {
+			newList = append(newList, entry)
+		}
+	}
+	cfg.Agents.List = newList
+
+	if err := saveConfigFile(cfg); err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// --- Skills ---
+
+func (s *Server) handleListSkills(w http.ResponseWriter, r *http.Request) {
+	homeDir, err := config.HomeDir()
+	if err != nil {
+		jsonResponse(w, http.StatusOK, []any{})
+		return
+	}
+
+	skillsDir := filepath.Join(homeDir, "skills")
+	entries, err := os.ReadDir(skillsDir)
+	if err != nil {
+		jsonResponse(w, http.StatusOK, []any{})
+		return
+	}
+
+	var skills []map[string]string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		desc := ""
+		skillPath := filepath.Join(skillsDir, name, "SKILL.md")
+		if data, readErr := os.ReadFile(skillPath); readErr == nil {
+			lines := strings.SplitN(string(data), "\n", 3)
+			for _, line := range lines {
+				line = strings.TrimSpace(line)
+				if line != "" && !strings.HasPrefix(line, "#") {
+					desc = line
+					break
+				}
+			}
+		}
+		skills = append(skills, map[string]string{
+			"name":        name,
+			"description": desc,
+			"location":    filepath.Join(skillsDir, name),
+			"type":        "skill",
+		})
+	}
+	if skills == nil {
+		jsonResponse(w, http.StatusOK, []any{})
+		return
+	}
+	jsonResponse(w, http.StatusOK, skills)
+}
+
+func (s *Server) handleDeleteSkill(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	homeDir, err := config.HomeDir()
+	if err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	skillPath := filepath.Join(homeDir, "skills", name)
+	if err := os.RemoveAll(skillPath); err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	jsonResponse(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// --- Plugins ---
+
+func (s *Server) handleListPlugins(w http.ResponseWriter, r *http.Request) {
+	homeDir, err := config.HomeDir()
+	if err != nil {
+		jsonResponse(w, http.StatusOK, []any{})
+		return
+	}
+
+	cfg, _ := config.Load()
+	pluginsDir := filepath.Join(homeDir, "plugins")
+	entries, err := os.ReadDir(pluginsDir)
+	if err != nil {
+		jsonResponse(w, http.StatusOK, []any{})
+		return
+	}
+
+	var plugins []map[string]any
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		id := entry.Name()
+
+		// Read plugin.json for metadata
+		pluginType := "unknown"
+		version := ""
+		manifestPath := filepath.Join(pluginsDir, id, "plugin.json")
+		if data, readErr := os.ReadFile(manifestPath); readErr == nil {
+			var manifest map[string]any
+			if json.Unmarshal(data, &manifest) == nil {
+				if t, ok := manifest["type"].(string); ok {
+					pluginType = t
+				}
+				if v, ok := manifest["version"].(string); ok {
+					version = v
+				}
+			}
+		}
+
+		enabled := false
+		if cfg != nil && cfg.Plugins.Entries != nil {
+			if pe, ok := cfg.Plugins.Entries[id]; ok {
+				enabled = pe.Enabled
+			}
+		}
+
+		status := "stopped"
+		if enabled {
+			status = "running"
+		}
+
+		plugins = append(plugins, map[string]any{
+			"id":      id,
+			"type":    pluginType,
+			"version": version,
+			"status":  status,
+			"enabled": enabled,
+		})
+	}
+	if plugins == nil {
+		jsonResponse(w, http.StatusOK, []any{})
+		return
+	}
+	jsonResponse(w, http.StatusOK, plugins)
+}
+
+func (s *Server) handleUpdatePlugin(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var req struct {
+		Enabled *bool                  `json:"enabled,omitempty"`
+		Config  map[string]interface{} `json:"config,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "invalid request"})
+		return
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+
+	if cfg.Plugins.Entries == nil {
+		cfg.Plugins.Entries = make(map[string]config.PluginEntryCfg)
+	}
+	entry := cfg.Plugins.Entries[id]
+	if req.Enabled != nil {
+		entry.Enabled = *req.Enabled
+	}
+	if req.Config != nil {
+		entry.Config = req.Config
+	}
+	cfg.Plugins.Entries[id] = entry
+
+	if err := saveConfigFile(cfg); err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// --- Channels ---
+
+func (s *Server) handleListChannels(w http.ResponseWriter, r *http.Request) {
+	cfg, err := config.Load()
+	if err != nil {
+		jsonResponse(w, http.StatusOK, []any{})
+		return
+	}
+
+	var channels []map[string]any
+	for chType, ch := range cfg.Channels {
+		status := "disconnected"
+		if ch.Enabled {
+			status = "connected"
+		}
+		channels = append(channels, map[string]any{
+			"type":    chType,
+			"enabled": ch.Enabled,
+			"status":  status,
+		})
+	}
+	if channels == nil {
+		jsonResponse(w, http.StatusOK, []any{})
+		return
+	}
+	jsonResponse(w, http.StatusOK, channels)
+}
+
+// --- Cron Jobs ---
+
+func (s *Server) handleListCronJobs(w http.ResponseWriter, r *http.Request) {
+	cfg, err := config.Load()
+	if err != nil {
+		jsonResponse(w, http.StatusOK, []any{})
+		return
+	}
+
+	var jobs []map[string]any
+	for i, job := range cfg.CronJobs {
+		jobs = append(jobs, map[string]any{
+			"id":       fmt.Sprintf("%d", i),
+			"name":     job.Name,
+			"type":     job.Type,
+			"schedule": job.Schedule,
+			"agentId":  job.AgentID,
+			"channel":  job.Channel,
+			"chatId":   job.ChatID,
+			"message":  job.Message,
+			"enabled":  true,
+		})
+	}
+	if jobs == nil {
+		jsonResponse(w, http.StatusOK, []any{})
+		return
+	}
+	jsonResponse(w, http.StatusOK, jobs)
+}
+
+func (s *Server) handleCreateCronJob(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name     string `json:"name"`
+		Type     string `json:"type"`
+		Schedule string `json:"schedule"`
+		AgentID  string `json:"agentId"`
+		Channel  string `json:"channel"`
+		ChatID   string `json:"chatId"`
+		Message  string `json:"message"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "invalid request"})
+		return
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+
+	cfg.CronJobs = append(cfg.CronJobs, config.CronJob{
+		Name:     req.Name,
+		Type:     req.Type,
+		Schedule: req.Schedule,
+		AgentID:  req.AgentID,
+		Channel:  req.Channel,
+		ChatID:   req.ChatID,
+		Message:  req.Message,
+	})
+
+	if err := saveConfigFile(cfg); err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleUpdateCronJob(w http.ResponseWriter, r *http.Request) {
+	idStr := r.PathValue("id")
+	var idx int
+	if _, err := fmt.Sscanf(idStr, "%d", &idx); err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "invalid id"})
+		return
+	}
+
+	var req struct {
+		Enabled *bool `json:"enabled,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "invalid request"})
+		return
+	}
+
+	// For now, just acknowledge — cron enable/disable would need scheduler integration
+	jsonResponse(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleDeleteCronJob(w http.ResponseWriter, r *http.Request) {
+	idStr := r.PathValue("id")
+	var idx int
+	if _, err := fmt.Sscanf(idStr, "%d", &idx); err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "invalid id"})
+		return
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+
+	if idx < 0 || idx >= len(cfg.CronJobs) {
+		jsonResponse(w, http.StatusNotFound, map[string]any{"ok": false, "error": "job not found"})
+		return
+	}
+
+	cfg.CronJobs = append(cfg.CronJobs[:idx], cfg.CronJobs[idx+1:]...)
+
+	if err := saveConfigFile(cfg); err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// --- Config Update ---
+
+func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
+	var incoming map[string]json.RawMessage
+	if err := json.NewDecoder(r.Body).Decode(&incoming); err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "invalid request"})
+		return
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+
+	// Merge providers
+	if raw, ok := incoming["providers"]; ok {
+		var providers map[string]config.ProviderConfig
+		if json.Unmarshal(raw, &providers) == nil {
+			for k, v := range providers {
+				if cfg.Providers == nil {
+					cfg.Providers = make(map[string]config.ProviderConfig)
+				}
+				existing := cfg.Providers[k]
+				if v.APIBase != "" {
+					existing.APIBase = v.APIBase
+				}
+				if v.APIKey != "" && !strings.Contains(v.APIKey, "****") {
+					existing.APIKey = v.APIKey
+				}
+				cfg.Providers[k] = existing
+			}
+		}
+	}
+
+	// Merge agents defaults
+	if raw, ok := incoming["agents"]; ok {
+		var agentUpdate struct {
+			Defaults struct {
+				Model string `json:"model"`
+			} `json:"defaults"`
+		}
+		if json.Unmarshal(raw, &agentUpdate) == nil {
+			if agentUpdate.Defaults.Model != "" {
+				cfg.Agents.Defaults.Model = agentUpdate.Defaults.Model
+			}
+		}
+	}
+
+	// Merge storage
+	if raw, ok := incoming["storage"]; ok {
+		var storage config.StorageCfg
+		if json.Unmarshal(raw, &storage) == nil {
+			cfg.Storage = storage
+		}
+	}
+
+	// Merge hooks
+	if raw, ok := incoming["hooks"]; ok {
+		var hooks config.HooksCfg
+		if json.Unmarshal(raw, &hooks) == nil {
+			cfg.Hooks = hooks
+		}
+	}
+
+	if err := saveConfigFile(cfg); err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// saveConfigFile persists the config to ~/.fastclaw/fastclaw.json.
+func saveConfigFile(cfg *config.Config) error {
+	homeDir, err := config.HomeDir()
+	if err != nil {
+		return err
+	}
+	configPath := filepath.Join(homeDir, "fastclaw.json")
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(configPath, data, 0o644)
 }
