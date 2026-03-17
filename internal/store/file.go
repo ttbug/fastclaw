@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // FileStore implements Store using the local filesystem (~/.fastclaw/).
@@ -300,6 +301,119 @@ func (f *FileStore) ListWorkspaceFiles(ctx context.Context, tenantID, agentID st
 		}
 	}
 	return files, nil
+}
+
+// --- Cron Jobs ---
+
+func (f *FileStore) cronJobsPath() string {
+	return filepath.Join(f.homeDir, "cron_jobs.json")
+}
+
+func (f *FileStore) loadCronJobs() ([]CronJobRecord, error) {
+	data, err := os.ReadFile(f.cronJobsPath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var jobs []CronJobRecord
+	if err := json.Unmarshal(data, &jobs); err != nil {
+		return nil, err
+	}
+	return jobs, nil
+}
+
+func (f *FileStore) saveCronJobs(jobs []CronJobRecord) error {
+	data, err := json.MarshalIndent(jobs, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(f.cronJobsPath(), data, 0o644)
+}
+
+func (f *FileStore) ListCronJobs(ctx context.Context, tenantID string) ([]CronJobRecord, error) {
+	return f.loadCronJobs()
+}
+
+func (f *FileStore) GetCronJob(ctx context.Context, tenantID, jobID string) (*CronJobRecord, error) {
+	jobs, err := f.loadCronJobs()
+	if err != nil {
+		return nil, err
+	}
+	for i := range jobs {
+		if jobs[i].ID == jobID {
+			return &jobs[i], nil
+		}
+	}
+	return nil, fmt.Errorf("cron job not found: %s", jobID)
+}
+
+func (f *FileStore) SaveCronJob(ctx context.Context, tenantID string, job *CronJobRecord) error {
+	jobs, err := f.loadCronJobs()
+	if err != nil {
+		return err
+	}
+	found := false
+	for i := range jobs {
+		if jobs[i].ID == job.ID {
+			jobs[i] = *job
+			found = true
+			break
+		}
+	}
+	if !found {
+		jobs = append(jobs, *job)
+	}
+	return f.saveCronJobs(jobs)
+}
+
+func (f *FileStore) DeleteCronJob(ctx context.Context, tenantID, jobID string) error {
+	jobs, err := f.loadCronJobs()
+	if err != nil {
+		return err
+	}
+	for i := range jobs {
+		if jobs[i].ID == jobID {
+			jobs = append(jobs[:i], jobs[i+1:]...)
+			return f.saveCronJobs(jobs)
+		}
+	}
+	return fmt.Errorf("cron job not found: %s", jobID)
+}
+
+func (f *FileStore) GetDueCronJobs(ctx context.Context, now time.Time) ([]CronJobRecord, error) {
+	jobs, err := f.loadCronJobs()
+	if err != nil {
+		return nil, err
+	}
+	var due []CronJobRecord
+	for _, j := range jobs {
+		if j.Enabled && j.NextRun != nil && !j.NextRun.After(now) {
+			due = append(due, j)
+		}
+	}
+	return due, nil
+}
+
+func (f *FileStore) LockCronJob(ctx context.Context, jobID, instanceID string) (bool, error) {
+	// Single instance: always succeed
+	return true, nil
+}
+
+func (f *FileStore) UpdateCronJobRun(ctx context.Context, jobID string, lastRun, nextRun time.Time) error {
+	jobs, err := f.loadCronJobs()
+	if err != nil {
+		return err
+	}
+	for i := range jobs {
+		if jobs[i].ID == jobID {
+			jobs[i].LastRun = &lastRun
+			jobs[i].NextRun = &nextRun
+			return f.saveCronJobs(jobs)
+		}
+	}
+	return fmt.Errorf("cron job not found: %s", jobID)
 }
 
 // Ensure FileStore implements Store.

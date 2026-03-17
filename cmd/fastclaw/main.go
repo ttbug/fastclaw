@@ -30,6 +30,7 @@ func main() {
 
 	rootCmd.AddCommand(gatewayCmd())
 	rootCmd.AddCommand(agentCmd())
+	rootCmd.AddCommand(skillCmd())
 	rootCmd.AddCommand(versionCmd())
 	rootCmd.AddCommand(upgradeCmd())
 	rootCmd.AddCommand(doctorCmd())

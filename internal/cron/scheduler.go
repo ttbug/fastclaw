@@ -38,18 +38,45 @@ type CronConfig struct {
 	Jobs []Job `json:"jobs"`
 }
 
+// StoreInterface is the subset of store.Store needed by the scheduler.
+type StoreInterface interface {
+	GetDueCronJobs(ctx context.Context, now time.Time) ([]StoreJob, error)
+	LockCronJob(ctx context.Context, jobID, instanceID string) (bool, error)
+	UpdateCronJobRun(ctx context.Context, jobID string, lastRun, nextRun time.Time) error
+}
+
+// StoreJob mirrors store.CronJobRecord to avoid import cycle.
+type StoreJob struct {
+	ID       string
+	AgentID  string
+	Name     string
+	Type     string
+	Schedule string
+	Message  string
+	Channel  string
+	ChatID   string
+}
+
 // Scheduler manages cron job execution.
 type Scheduler struct {
-	jobs []Job
-	bus  *bus.MessageBus
+	jobs       []Job
+	bus        *bus.MessageBus
+	store      StoreInterface
+	instanceID string
 }
 
 // NewScheduler creates a scheduler from config.
 func NewScheduler(jobs []Job, mb *bus.MessageBus) *Scheduler {
 	return &Scheduler{
-		jobs: jobs,
-		bus:  mb,
+		jobs:       jobs,
+		bus:        mb,
+		instanceID: "default",
 	}
+}
+
+// SetStore enables DB-backed cron job polling.
+func (s *Scheduler) SetStore(st StoreInterface) {
+	s.store = st
 }
 
 // LoadJobs reads cron jobs from a JSON file.
@@ -72,20 +99,83 @@ func LoadJobs(path string) ([]Job, error) {
 
 // Start begins the scheduler. It blocks until ctx is cancelled.
 func (s *Scheduler) Start(ctx context.Context) {
-	if len(s.jobs) == 0 {
+	if len(s.jobs) == 0 && s.store == nil {
 		slog.Info("no cron jobs configured")
 		return
 	}
 
-	slog.Info("cron scheduler started", "jobs", len(s.jobs))
+	slog.Info("cron scheduler started", "jobs", len(s.jobs), "store_backed", s.store != nil)
 
-	// Start a goroutine for each job
+	// Start a goroutine for each in-memory job
 	for _, job := range s.jobs {
 		go s.runJob(ctx, job)
 	}
 
+	// If store is set, poll for DB-backed jobs
+	if s.store != nil {
+		go s.pollStore(ctx)
+	}
+
 	<-ctx.Done()
 	slog.Info("cron scheduler stopped")
+}
+
+func (s *Scheduler) pollStore(ctx context.Context) {
+	ticker := time.NewTicker(60 * time.Second)
+	defer ticker.Stop()
+
+	// Run immediately on start, then on tick
+	s.processDueJobs(ctx)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.processDueJobs(ctx)
+		}
+	}
+}
+
+func (s *Scheduler) processDueJobs(ctx context.Context) {
+	now := time.Now()
+	dueJobs, err := s.store.GetDueCronJobs(ctx, now)
+	if err != nil {
+		slog.Error("failed to get due cron jobs", "error", err)
+		return
+	}
+
+	for _, j := range dueJobs {
+		locked, err := s.store.LockCronJob(ctx, j.ID, s.instanceID)
+		if err != nil {
+			slog.Error("failed to lock cron job", "id", j.ID, "error", err)
+			continue
+		}
+		if !locked {
+			continue
+		}
+
+		slog.Info("firing store-backed cron job", "id", j.ID, "name", j.Name)
+
+		text := j.Message
+		if text == "" {
+			text = fmt.Sprintf("[Cron Job: %s] This is a scheduled task trigger.", j.Name)
+		}
+
+		s.bus.Inbound <- bus.InboundMessage{
+			Channel:  j.Channel,
+			ChatID:   j.ChatID,
+			UserID:   "cron",
+			Text:     text,
+			PeerKind: "dm",
+		}
+
+		// Calculate next run (simple: add 60s for now; real implementation would parse schedule)
+		nextRun := now.Add(60 * time.Second)
+		if err := s.store.UpdateCronJobRun(ctx, j.ID, now, nextRun); err != nil {
+			slog.Error("failed to update cron job run", "id", j.ID, "error", err)
+		}
+	}
 }
 
 func (s *Scheduler) runJob(ctx context.Context, job Job) {

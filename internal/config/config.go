@@ -78,12 +78,16 @@ type AgentDefaults struct {
 
 // AgentEntry is a per-agent entry in config.json agents.list.
 type AgentEntry struct {
-	ID                string  `json:"id"`
-	Workspace         string  `json:"workspace,omitempty"`
-	Model             string  `json:"model,omitempty"`
-	MaxTokens         int     `json:"maxTokens,omitempty"`
-	Temperature       float64 `json:"temperature,omitempty"`
-	MaxToolIterations int     `json:"maxToolIterations,omitempty"`
+	ID                string                     `json:"id"`
+	Workspace         string                     `json:"workspace,omitempty"`
+	Model             string                     `json:"model,omitempty"`
+	MaxTokens         int                        `json:"maxTokens,omitempty"`
+	Temperature       float64                    `json:"temperature,omitempty"`
+	MaxToolIterations int                        `json:"maxToolIterations,omitempty"`
+	Skills            []string                   `json:"skills,omitempty"`
+	Tools             []string                   `json:"tools,omitempty"`
+	MCPServers        map[string]MCPServerConfig `json:"mcpServers,omitempty"`
+	AlwaysLoadSkills  []string                   `json:"alwaysLoadSkills,omitempty"`
 }
 
 // ChannelConfig holds per-channel configuration with optional accounts.

@@ -110,6 +110,26 @@ func (d *DBStore) migrationSQL() []string {
 			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
 		d.memoryLogsIndex(),
+		`CREATE TABLE IF NOT EXISTS cron_jobs (
+			id TEXT PRIMARY KEY,
+			tenant_id TEXT NOT NULL,
+			agent_id TEXT NOT NULL,
+			name TEXT NOT NULL DEFAULT '',
+			type TEXT NOT NULL DEFAULT 'cron',
+			schedule TEXT NOT NULL,
+			message TEXT NOT NULL,
+			channel TEXT NOT NULL,
+			chat_id TEXT NOT NULL,
+			account_id TEXT NOT NULL DEFAULT '',
+			timezone TEXT NOT NULL DEFAULT 'UTC',
+			enabled BOOLEAN NOT NULL DEFAULT true,
+			last_run TIMESTAMP,
+			next_run TIMESTAMP,
+			locked_by TEXT,
+			locked_at TIMESTAMP,
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_cron_jobs_schedule ON cron_jobs (tenant_id, enabled, next_run)`,
 	}
 }
 
@@ -453,6 +473,137 @@ func (d *DBStore) ListWorkspaceFiles(ctx context.Context, tenantID, agentID stri
 		files = append(files, f)
 	}
 	return files, nil
+}
+
+// --- Cron Jobs ---
+
+func (d *DBStore) ListCronJobs(ctx context.Context, tenantID string) ([]CronJobRecord, error) {
+	rows, err := d.db.QueryContext(ctx,
+		fmt.Sprintf("SELECT id, tenant_id, agent_id, name, type, schedule, message, channel, chat_id, account_id, timezone, enabled, last_run, next_run, created_at FROM cron_jobs WHERE tenant_id = %s ORDER BY created_at", d.ph(1)),
+		tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return d.scanCronJobs(rows)
+}
+
+func (d *DBStore) GetCronJob(ctx context.Context, tenantID, jobID string) (*CronJobRecord, error) {
+	row := d.db.QueryRowContext(ctx,
+		fmt.Sprintf("SELECT id, tenant_id, agent_id, name, type, schedule, message, channel, chat_id, account_id, timezone, enabled, last_run, next_run, created_at FROM cron_jobs WHERE tenant_id = %s AND id = %s", d.ph(1), d.ph(2)),
+		tenantID, jobID)
+	var j CronJobRecord
+	var lastRun, nextRun sql.NullTime
+	if err := row.Scan(&j.ID, &j.TenantID, &j.AgentID, &j.Name, &j.Type, &j.Schedule, &j.Message, &j.Channel, &j.ChatID, &j.AccountID, &j.Timezone, &j.Enabled, &lastRun, &nextRun, &j.CreatedAt); err != nil {
+		return nil, err
+	}
+	if lastRun.Valid {
+		j.LastRun = &lastRun.Time
+	}
+	if nextRun.Valid {
+		j.NextRun = &nextRun.Time
+	}
+	return &j, nil
+}
+
+func (d *DBStore) SaveCronJob(ctx context.Context, tenantID string, job *CronJobRecord) error {
+	now := time.Now()
+	if d.dialect == "postgres" {
+		_, err := d.db.ExecContext(ctx,
+			`INSERT INTO cron_jobs (id, tenant_id, agent_id, name, type, schedule, message, channel, chat_id, account_id, timezone, enabled, last_run, next_run, created_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+			 ON CONFLICT (id) DO UPDATE SET name=$4, type=$5, schedule=$6, message=$7, channel=$8, chat_id=$9, account_id=$10, timezone=$11, enabled=$12, last_run=$13, next_run=$14`,
+			job.ID, tenantID, job.AgentID, job.Name, job.Type, job.Schedule, job.Message, job.Channel, job.ChatID, job.AccountID, job.Timezone, job.Enabled, job.LastRun, job.NextRun, now)
+		return err
+	}
+	_, err := d.db.ExecContext(ctx,
+		`INSERT INTO cron_jobs (id, tenant_id, agent_id, name, type, schedule, message, channel, chat_id, account_id, timezone, enabled, last_run, next_run, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT (id) DO UPDATE SET
+		   name=excluded.name, type=excluded.type, schedule=excluded.schedule, message=excluded.message,
+		   channel=excluded.channel, chat_id=excluded.chat_id, account_id=excluded.account_id,
+		   timezone=excluded.timezone, enabled=excluded.enabled, last_run=excluded.last_run, next_run=excluded.next_run`,
+		job.ID, tenantID, job.AgentID, job.Name, job.Type, job.Schedule, job.Message, job.Channel, job.ChatID, job.AccountID, job.Timezone, job.Enabled, job.LastRun, job.NextRun, now)
+	return err
+}
+
+func (d *DBStore) DeleteCronJob(ctx context.Context, tenantID, jobID string) error {
+	_, err := d.db.ExecContext(ctx,
+		fmt.Sprintf("DELETE FROM cron_jobs WHERE tenant_id = %s AND id = %s", d.ph(1), d.ph(2)),
+		tenantID, jobID)
+	return err
+}
+
+func (d *DBStore) GetDueCronJobs(ctx context.Context, now time.Time) ([]CronJobRecord, error) {
+	var rows *sql.Rows
+	var err error
+	if d.dialect == "postgres" {
+		rows, err = d.db.QueryContext(ctx,
+			`SELECT id, tenant_id, agent_id, name, type, schedule, message, channel, chat_id, account_id, timezone, enabled, last_run, next_run, created_at
+			 FROM cron_jobs WHERE enabled = true AND next_run <= $1 ORDER BY next_run`, now)
+	} else {
+		rows, err = d.db.QueryContext(ctx,
+			`SELECT id, tenant_id, agent_id, name, type, schedule, message, channel, chat_id, account_id, timezone, enabled, last_run, next_run, created_at
+			 FROM cron_jobs WHERE enabled = 1 AND next_run <= ? ORDER BY next_run`, now)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return d.scanCronJobs(rows)
+}
+
+func (d *DBStore) LockCronJob(ctx context.Context, jobID, instanceID string) (bool, error) {
+	now := time.Now()
+	fiveMinAgo := now.Add(-5 * time.Minute)
+	var res sql.Result
+	var err error
+	if d.dialect == "postgres" {
+		res, err = d.db.ExecContext(ctx,
+			`UPDATE cron_jobs SET locked_by=$1, locked_at=$2 WHERE id=$3 AND (locked_by IS NULL OR locked_at < $4)`,
+			instanceID, now, jobID, fiveMinAgo)
+	} else {
+		res, err = d.db.ExecContext(ctx,
+			`UPDATE cron_jobs SET locked_by=?, locked_at=? WHERE id=? AND (locked_by IS NULL OR locked_at < ?)`,
+			instanceID, now, jobID, fiveMinAgo)
+	}
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+func (d *DBStore) UpdateCronJobRun(ctx context.Context, jobID string, lastRun, nextRun time.Time) error {
+	if d.dialect == "postgres" {
+		_, err := d.db.ExecContext(ctx,
+			`UPDATE cron_jobs SET last_run=$1, next_run=$2, locked_by=NULL, locked_at=NULL WHERE id=$3`,
+			lastRun, nextRun, jobID)
+		return err
+	}
+	_, err := d.db.ExecContext(ctx,
+		`UPDATE cron_jobs SET last_run=?, next_run=?, locked_by=NULL, locked_at=NULL WHERE id=?`,
+		lastRun, nextRun, jobID)
+	return err
+}
+
+func (d *DBStore) scanCronJobs(rows *sql.Rows) ([]CronJobRecord, error) {
+	var jobs []CronJobRecord
+	for rows.Next() {
+		var j CronJobRecord
+		var lastRun, nextRun sql.NullTime
+		if err := rows.Scan(&j.ID, &j.TenantID, &j.AgentID, &j.Name, &j.Type, &j.Schedule, &j.Message, &j.Channel, &j.ChatID, &j.AccountID, &j.Timezone, &j.Enabled, &lastRun, &nextRun, &j.CreatedAt); err != nil {
+			continue
+		}
+		if lastRun.Valid {
+			j.LastRun = &lastRun.Time
+		}
+		if nextRun.Valid {
+			j.NextRun = &nextRun.Time
+		}
+		jobs = append(jobs, j)
+	}
+	return jobs, nil
 }
 
 // Ensure DBStore implements Store.

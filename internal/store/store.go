@@ -38,8 +38,36 @@ type Store interface {
 	SaveWorkspaceFile(ctx context.Context, tenantID, agentID, filename string, data []byte) error
 	ListWorkspaceFiles(ctx context.Context, tenantID, agentID string) ([]string, error)
 
+	// Cron Jobs
+	ListCronJobs(ctx context.Context, tenantID string) ([]CronJobRecord, error)
+	GetCronJob(ctx context.Context, tenantID, jobID string) (*CronJobRecord, error)
+	SaveCronJob(ctx context.Context, tenantID string, job *CronJobRecord) error
+	DeleteCronJob(ctx context.Context, tenantID, jobID string) error
+	GetDueCronJobs(ctx context.Context, now time.Time) ([]CronJobRecord, error) // cross-tenant
+	LockCronJob(ctx context.Context, jobID, instanceID string) (bool, error)
+	UpdateCronJobRun(ctx context.Context, jobID string, lastRun, nextRun time.Time) error
+
 	// Close releases resources.
 	Close() error
+}
+
+// CronJobRecord holds a scheduled job.
+type CronJobRecord struct {
+	ID        string     `json:"id"`
+	TenantID  string     `json:"tenantId"`
+	AgentID   string     `json:"agentId"`
+	Name      string     `json:"name"`
+	Type      string     `json:"type"`      // cron, interval, once
+	Schedule  string     `json:"schedule"`
+	Message   string     `json:"message"`
+	Channel   string     `json:"channel"`
+	ChatID    string     `json:"chatId"`
+	AccountID string     `json:"accountId"`
+	Timezone  string     `json:"timezone"`
+	Enabled   bool       `json:"enabled"`
+	LastRun   *time.Time `json:"lastRun,omitempty"`
+	NextRun   *time.Time `json:"nextRun,omitempty"`
+	CreatedAt time.Time  `json:"createdAt"`
 }
 
 // TenantConfig holds the full config for a tenant (maps to fastclaw.json for file store).
