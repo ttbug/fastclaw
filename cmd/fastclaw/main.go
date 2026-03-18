@@ -15,6 +15,7 @@ import (
 	"github.com/fastclaw-ai/fastclaw/internal/agent"
 	"github.com/fastclaw-ai/fastclaw/internal/api"
 	"github.com/fastclaw-ai/fastclaw/internal/config"
+	"github.com/fastclaw-ai/fastclaw/internal/daemon"
 	"github.com/fastclaw-ai/fastclaw/internal/gateway"
 	"github.com/fastclaw-ai/fastclaw/internal/setup"
 )
@@ -42,6 +43,7 @@ func main() {
 	rootCmd.AddCommand(providerCmd())
 	rootCmd.AddCommand(sandboxCmd())
 	rootCmd.AddCommand(policyCmd())
+	rootCmd.AddCommand(daemonCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -75,6 +77,12 @@ func runGateway(port int) error {
 	}
 
 	slog.Info("starting gateway")
+
+	// Write PID file for daemon management
+	if err := daemon.WritePIDFile(); err != nil {
+		slog.Warn("failed to write PID file", "error", err)
+	}
+	defer daemon.RemovePIDFile()
 
 	gw, err := gateway.New(cfg)
 	if err != nil {
