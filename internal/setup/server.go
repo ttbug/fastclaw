@@ -3,6 +3,8 @@ package setup
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fastclaw-ai/fastclaw/internal/api"
 	"github.com/fastclaw-ai/fastclaw/internal/config"
 )
 
@@ -35,6 +38,7 @@ type Server struct {
 	port          int
 	onConfig      func(*config.Config) // called after config is saved
 	agentProvider AgentProvider
+	apiServer     *api.Server
 	startedAt     time.Time
 }
 
@@ -46,6 +50,11 @@ func NewServer(port int, onConfig func(*config.Config)) *Server {
 // SetAgentProvider sets the agent provider for chat and status endpoints.
 func (s *Server) SetAgentProvider(ap AgentProvider) {
 	s.agentProvider = ap
+}
+
+// SetAPIServer sets the OpenAI-compatible API server for /v1/* and /ws routes.
+func (s *Server) SetAPIServer(apiSrv *api.Server) {
+	s.apiServer = apiSrv
 }
 
 // Run starts the HTTP server and blocks until the context is canceled
@@ -83,6 +92,11 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("POST /api/cron", s.handleCreateCronJob)
 	mux.HandleFunc("PUT /api/cron/{id}", s.handleUpdateCronJob)
 	mux.HandleFunc("DELETE /api/cron/{id}", s.handleDeleteCronJob)
+
+	// OpenAI-compatible API and WebSocket gateway
+	if s.apiServer != nil {
+		s.apiServer.RegisterRoutes(mux)
+	}
 
 	// Static files from embedded web/out
 	webRoot, err := fs.Sub(webFS, "web")
@@ -419,6 +433,14 @@ func (s *Server) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 				AgentID: req.AgentName,
 				Match:   config.Match{Channel: "telegram"},
 			},
+		},
+	}
+
+	// Auto-generate a gateway auth token
+	cfg.Gateway = config.GatewayCfg{
+		Port: req.Port,
+		Auth: config.GatewayAuth{
+			Token: generateRandomToken(32),
 		},
 	}
 
@@ -1072,6 +1094,16 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonResponse(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// generateRandomToken generates a cryptographically random hex token.
+func generateRandomToken(length int) string {
+	b := make([]byte, length)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback: this should never happen
+		return "fastclaw-default-token"
+	}
+	return hex.EncodeToString(b)
 }
 
 // saveConfigFile persists the config to ~/.fastclaw/fastclaw.json.

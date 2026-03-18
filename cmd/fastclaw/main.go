@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/fastclaw-ai/fastclaw/internal/agent"
+	"github.com/fastclaw-ai/fastclaw/internal/api"
 	"github.com/fastclaw-ai/fastclaw/internal/config"
 	"github.com/fastclaw-ai/fastclaw/internal/gateway"
 	"github.com/fastclaw-ai/fastclaw/internal/setup"
@@ -81,6 +82,18 @@ func runGateway(port int) error {
 	webSrv := setup.NewServer(port, nil)
 	webSrv.SetAgentProvider(&agentProviderAdapter{mgr: gw.AgentManager()})
 
+	// Set up OpenAI-compatible API and WebSocket gateway
+	gatewayToken := cfg.Gateway.Auth.Token
+	apiSrv := api.NewServer(gw.AgentManager(), gatewayToken)
+	webSrv.SetAPIServer(apiSrv)
+
+	if gatewayToken != "" {
+		slog.Info("gateway API enabled", "port", port, "auth", "token")
+	}
+
+	// Write openclaw.json for ChatClaw auto-detect
+	writeOpenClawConfig(port, gatewayToken)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -115,6 +128,36 @@ func (a *agentProviderAdapter) AgentByID(id string) setup.AgentHandle {
 		return nil
 	}
 	return ag
+}
+
+// writeOpenClawConfig writes ~/.openclaw/openclaw.json for ChatClaw auto-detect.
+func writeOpenClawConfig(port int, token string) {
+	if token == "" {
+		return
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	dir := filepath.Join(home, ".openclaw")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
+
+	cfg := map[string]any{
+		"gateway": map[string]any{
+			"port": port,
+			"auth": map[string]string{
+				"token": token,
+			},
+		},
+	}
+	data, _ := json.MarshalIndent(cfg, "", "  ")
+	if err := os.WriteFile(filepath.Join(dir, "openclaw.json"), data, 0o644); err != nil {
+		slog.Warn("failed to write openclaw.json", "error", err)
+	} else {
+		slog.Info("wrote openclaw.json for ChatClaw auto-detect")
+	}
 }
 
 func runSetupWizard(port int) error {

@@ -1,0 +1,262 @@
+package api
+
+import (
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/fastclaw-ai/fastclaw/internal/agent"
+	"github.com/fastclaw-ai/fastclaw/internal/bus"
+)
+
+// chatCompletionRequest mirrors the OpenAI chat completion request.
+type chatCompletionRequest struct {
+	Model    string        `json:"model"`
+	Messages []chatMessage `json:"messages"`
+	Stream   *bool         `json:"stream,omitempty"`
+}
+
+type chatMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+// chatCompletionChunk is a single SSE chunk in streaming mode.
+type chatCompletionChunk struct {
+	ID      string        `json:"id"`
+	Object  string        `json:"object"`
+	Created int64         `json:"created"`
+	Model   string        `json:"model"`
+	Choices []chunkChoice `json:"choices"`
+}
+
+type chunkChoice struct {
+	Index        int        `json:"index"`
+	Delta        chunkDelta `json:"delta"`
+	FinishReason *string    `json:"finish_reason"`
+}
+
+type chunkDelta struct {
+	Role    string `json:"role,omitempty"`
+	Content string `json:"content,omitempty"`
+}
+
+// chatCompletionResponse is the non-streaming response.
+type chatCompletionResponse struct {
+	ID      string             `json:"id"`
+	Object  string             `json:"object"`
+	Created int64              `json:"created"`
+	Model   string             `json:"model"`
+	Choices []completionChoice `json:"choices"`
+	Usage   completionUsage    `json:"usage"`
+}
+
+type completionChoice struct {
+	Index        int         `json:"index"`
+	Message      chatMessage `json:"message"`
+	FinishReason string      `json:"finish_reason"`
+}
+
+type completionUsage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+}
+
+// HandleChatCompletions handles POST /v1/chat/completions.
+func (s *Server) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
+	var req chatCompletionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": map[string]string{"message": "invalid request body", "type": "invalid_request_error"},
+		})
+		return
+	}
+
+	if len(req.Messages) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": map[string]string{"message": "messages is required", "type": "invalid_request_error"},
+		})
+		return
+	}
+
+	// Resolve agent from header
+	agentID := r.Header.Get("x-openclaw-agent-id")
+	ag := s.resolveAgent(agentID)
+	if ag == nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{
+			"error": map[string]string{"message": "agent not found", "type": "not_found_error"},
+		})
+		return
+	}
+
+	// Build session key from header
+	sessionKey := r.Header.Get("x-openclaw-session-key")
+	if sessionKey == "" {
+		sessionKey = "api-" + fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+
+	// Extract the last user message
+	var userText string
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		if req.Messages[i].Role == "user" {
+			userText = req.Messages[i].Content
+			break
+		}
+	}
+	if userText == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": map[string]string{"message": "no user message found", "type": "invalid_request_error"},
+		})
+		return
+	}
+
+	// Build inbound message
+	msg := bus.InboundMessage{
+		Channel:  "api",
+		ChatID:   sessionKey,
+		UserID:   "api-user",
+		Text:     userText,
+		PeerKind: "dm",
+	}
+
+	slog.Info("chat completion request",
+		"agent", ag.Name(),
+		"session", sessionKey,
+		"stream", req.Stream != nil && *req.Stream,
+	)
+
+	// Get reply from agent
+	reply := ag.HandleMessage(r.Context(), msg)
+
+	model := ag.Model()
+	if req.Model != "" {
+		model = req.Model
+	}
+	chatID := fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano())
+	now := time.Now().Unix()
+
+	isStream := req.Stream != nil && *req.Stream
+	if isStream {
+		s.streamResponse(w, reply, chatID, model, now)
+	} else {
+		s.fullResponse(w, reply, chatID, model, now)
+	}
+}
+
+func (s *Server) streamResponse(w http.ResponseWriter, reply, chatID, model string, created int64) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.WriteHeader(http.StatusOK)
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		// Fallback: send everything at once
+		s.writeSSEChunk(w, chatID, model, created, "assistant", reply, nil)
+		done := "stop"
+		s.writeSSEChunk(w, chatID, model, created, "", "", &done)
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		return
+	}
+
+	// Send role chunk
+	s.writeSSEChunk(w, chatID, model, created, "assistant", "", nil)
+	flusher.Flush()
+
+	// Split reply into words for streaming effect
+	words := splitIntoChunks(reply)
+	for _, word := range words {
+		s.writeSSEChunk(w, chatID, model, created, "", word, nil)
+		flusher.Flush()
+	}
+
+	// Send finish chunk
+	done := "stop"
+	s.writeSSEChunk(w, chatID, model, created, "", "", &done)
+	flusher.Flush()
+
+	fmt.Fprint(w, "data: [DONE]\n\n")
+	flusher.Flush()
+}
+
+func (s *Server) writeSSEChunk(w http.ResponseWriter, id, model string, created int64, role, content string, finishReason *string) {
+	chunk := chatCompletionChunk{
+		ID:      id,
+		Object:  "chat.completion.chunk",
+		Created: created,
+		Model:   model,
+		Choices: []chunkChoice{
+			{
+				Index: 0,
+				Delta: chunkDelta{
+					Role:    role,
+					Content: content,
+				},
+				FinishReason: finishReason,
+			},
+		},
+	}
+	data, _ := json.Marshal(chunk)
+	fmt.Fprintf(w, "data: %s\n\n", data)
+}
+
+func (s *Server) fullResponse(w http.ResponseWriter, reply, chatID, model string, created int64) {
+	resp := chatCompletionResponse{
+		ID:      chatID,
+		Object:  "chat.completion",
+		Created: created,
+		Model:   model,
+		Choices: []completionChoice{
+			{
+				Index:        0,
+				Message:      chatMessage{Role: "assistant", Content: reply},
+				FinishReason: "stop",
+			},
+		},
+		Usage: completionUsage{
+			PromptTokens:     0,
+			CompletionTokens: 0,
+			TotalTokens:      0,
+		},
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) resolveAgent(agentID string) *agent.Agent {
+	if agentID != "" {
+		if ag := s.agentMgr.AgentByID(agentID); ag != nil {
+			return ag
+		}
+	}
+	// Fall back to default or first agent
+	if def := s.agentMgr.DefaultAgent(); def != nil {
+		return def
+	}
+	all := s.agentMgr.All()
+	if len(all) > 0 {
+		return all[0]
+	}
+	return nil
+}
+
+// splitIntoChunks splits text into word-level chunks preserving whitespace.
+func splitIntoChunks(text string) []string {
+	if text == "" {
+		return nil
+	}
+	words := strings.Fields(text)
+	chunks := make([]string, 0, len(words))
+	for i, w := range words {
+		if i > 0 {
+			chunks = append(chunks, " "+w)
+		} else {
+			chunks = append(chunks, w)
+		}
+	}
+	return chunks
+}

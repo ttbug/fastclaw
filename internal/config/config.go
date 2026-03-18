@@ -70,6 +70,17 @@ type PluginEntryCfg struct {
 	Config  map[string]interface{} `json:"config,omitempty"`
 }
 
+// GatewayAuth holds authentication settings for the gateway API.
+type GatewayAuth struct {
+	Token string `json:"token"`
+}
+
+// GatewayCfg holds gateway server configuration.
+type GatewayCfg struct {
+	Port int         `json:"port,omitempty"`
+	Auth GatewayAuth `json:"auth,omitempty"`
+}
+
 // Config is the top-level configuration loaded from ~/.fastclaw/fastclaw.json.
 type Config struct {
 	Providers  map[string]ProviderConfig  `json:"providers"`
@@ -84,6 +95,7 @@ type Config struct {
 	WebSearch  WebSearchCfg               `json:"webSearch,omitempty"`
 	Hooks      HooksCfg                   `json:"hooks,omitempty"`
 	Plugins    PluginsCfg                 `json:"plugins,omitempty"`
+	Gateway    GatewayCfg                 `json:"gateway,omitempty"`
 }
 
 // ProviderConfig holds API credentials for an LLM provider.
