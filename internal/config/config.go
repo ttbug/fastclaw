@@ -130,6 +130,7 @@ type Config struct {
 	Plugins    PluginsCfg                 `json:"plugins,omitempty"`
 	Gateway    GatewayCfg                 `json:"gateway,omitempty"`
 	TaskQueue  TaskQueueCfg               `json:"taskQueue,omitempty"`
+	Skills     SkillsCfg                  `json:"skills,omitempty"`
 }
 
 // ProviderConfig holds API credentials for an LLM provider.
@@ -216,6 +217,31 @@ type AgentFileConfig struct {
 type SkillsConfig struct {
 	Disabled   []string `json:"disabled,omitempty"`
 	AlwaysLoad []string `json:"alwaysLoad,omitempty"`
+}
+
+// SkillsCfg is the top-level skills configuration (global).
+type SkillsCfg struct {
+	Install    SkillsInstallCfg         `json:"install,omitempty"`
+	Entries    map[string]SkillEntryCfg `json:"entries,omitempty"`
+	Load       SkillsLoadCfg            `json:"load,omitempty"`
+	AlwaysLoad []string                 `json:"alwaysLoad,omitempty"`
+}
+
+// SkillsInstallCfg configures skill installation behavior.
+type SkillsInstallCfg struct {
+	NodeManager string `json:"nodeManager,omitempty"` // npm, pnpm, bun
+}
+
+// SkillEntryCfg is per-skill configuration.
+type SkillEntryCfg struct {
+	Enabled bool              `json:"enabled"`
+	APIKey  string            `json:"apiKey,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
+}
+
+// SkillsLoadCfg configures extra skill directories.
+type SkillsLoadCfg struct {
+	ExtraDirs []string `json:"extraDirs,omitempty"`
 }
 
 // ResolvedAgent is the fully merged config for a single agent.

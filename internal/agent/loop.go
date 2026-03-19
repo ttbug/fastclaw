@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 
 	"github.com/fastclaw-ai/fastclaw/internal/agent/tools"
@@ -34,11 +35,18 @@ type Agent struct {
 	workspacePath     string
 	homeDir           string
 	skillsCfg         config.SkillsConfig
+	globalSkillsCfg   config.SkillsCfg
+	messageBus        *bus.MessageBus
 	subAgentSpawner   tools.SubAgentSpawner
 }
 
 // NewAgent creates a new Agent from a resolved config.
 func NewAgent(rc config.ResolvedAgent, prov provider.Provider, mb *bus.MessageBus, homeDir string) *Agent {
+	return NewAgentWithSkillsCfg(rc, prov, mb, homeDir, config.SkillsCfg{})
+}
+
+// NewAgentWithSkillsCfg creates a new Agent with global skills config for env injection.
+func NewAgentWithSkillsCfg(rc config.ResolvedAgent, prov provider.Provider, mb *bus.MessageBus, homeDir string, globalSkillsCfg config.SkillsCfg) *Agent {
 	memory := NewMemory(rc.Workspace)
 	registry := tools.NewRegistry(rc.Workspace)
 	tools.RegisterMessage(registry, mb)
@@ -46,10 +54,14 @@ func NewAgent(rc config.ResolvedAgent, prov provider.Provider, mb *bus.MessageBu
 	tools.RegisterWebFetch(registry)
 	tools.RegisterLoadSkill(registry, homeDir, rc.Workspace, "")
 
-	// Load skills
-	loader := NewSkillsLoader(homeDir, rc.Workspace, "", rc.Skills)
+	// Load skills with OpenClaw compatibility
+	loader := NewSkillsLoaderWithGlobal(homeDir, rc.Workspace, "", rc.Skills, globalSkillsCfg)
 	skills := loader.LoadSkills()
 	skillsSummary := loader.BuildSkillsSummary(skills)
+
+	// Set up skill env injection for exec tool
+	skillDirs := loader.AllSkillDirs()
+	tools.RegisterExecWithSkillEnv(registry, nil, loader.SkillEnvVars, skillDirs)
 
 	if len(skills) > 0 {
 		slog.Info("loaded skills", "agent", rc.ID, "count", len(skills))
@@ -78,6 +90,8 @@ func NewAgent(rc config.ResolvedAgent, prov provider.Provider, mb *bus.MessageBu
 		workspacePath:     rc.Workspace,
 		homeDir:           homeDir,
 		skillsCfg:         rc.Skills,
+		globalSkillsCfg:   globalSkillsCfg,
+		messageBus:        mb,
 	}
 
 	// Connect MCP servers and register their tools
@@ -332,6 +346,11 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 				)
 			}
 
+			// Check for MEDIA: protocol in tool output
+			if mediaPaths := extractMediaPaths(result); len(mediaPaths) > 0 {
+				a.sendMediaFiles(msg, mediaPaths)
+			}
+
 			toolMsg := provider.Message{
 				Role:       "tool",
 				Content:    result,
@@ -499,6 +518,11 @@ func (a *Agent) HandleMessageStream(ctx context.Context, msg bus.InboundMessage)
 				slog.Warn("tool execution error", "agent", a.name, "name", tc.Function.Name, "error", execErr)
 			}
 
+			// Check for MEDIA: protocol in tool output
+			if mediaPaths := extractMediaPaths(result); len(mediaPaths) > 0 {
+				a.sendMediaFiles(msg, mediaPaths)
+			}
+
 			toolMsg := provider.Message{Role: "tool", Content: result, ToolCallID: tc.ID, Name: tc.Function.Name}
 			sess.Append(toolMsg)
 			messages = append(messages, toolMsg)
@@ -539,8 +563,44 @@ func (a *Agent) UpdateConfig(rc config.ResolvedAgent) {
 func (a *Agent) ReloadWorkspaceFiles() {
 	a.memory = NewMemory(a.workspacePath)
 	// Rebuild skills summary
-	loader := NewSkillsLoader(a.homeDir, a.workspacePath, "", a.skillsCfg)
+	loader := NewSkillsLoaderWithGlobal(a.homeDir, a.workspacePath, "", a.skillsCfg, a.globalSkillsCfg)
 	skills := loader.LoadSkills()
 	skillsSummary := loader.BuildSkillsSummary(skills)
 	a.ctxBuilder = NewContextBuilder(a.workspacePath, a.memory, skillsSummary)
+}
+
+// extractMediaPaths scans tool output for MEDIA: lines and returns file paths.
+// The MEDIA: protocol is used by OpenClaw skills to attach files to chat messages.
+func extractMediaPaths(output string) []string {
+	var paths []string
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "MEDIA:") {
+			path := strings.TrimSpace(strings.TrimPrefix(line, "MEDIA:"))
+			if path != "" {
+				if _, err := os.Stat(path); err == nil {
+					paths = append(paths, path)
+				}
+			}
+		}
+	}
+	return paths
+}
+
+// sendMediaFiles sends extracted MEDIA: files to the outbound bus.
+func (a *Agent) sendMediaFiles(msg bus.InboundMessage, mediaPaths []string) {
+	if len(mediaPaths) == 0 || a.messageBus == nil {
+		return
+	}
+	outMsg := bus.OutboundMessage{
+		Channel:    msg.Channel,
+		AccountID:  msg.AccountID,
+		ChatID:     msg.ChatID,
+		MediaPaths: mediaPaths,
+	}
+	select {
+	case a.messageBus.Outbound <- outMsg:
+	default:
+		slog.Warn("outbound channel full, dropping media message", "agent", a.name)
+	}
 }
