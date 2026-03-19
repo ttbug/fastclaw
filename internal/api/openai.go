@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/fastclaw-ai/fastclaw/internal/agent"
@@ -129,9 +128,6 @@ func (s *Server) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		"stream", req.Stream != nil && *req.Stream,
 	)
 
-	// Get reply from agent
-	reply := ag.HandleMessage(r.Context(), msg)
-
 	model := ag.Model()
 	if req.Model != "" {
 		model = req.Model
@@ -141,13 +137,15 @@ func (s *Server) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	isStream := req.Stream != nil && *req.Stream
 	if isStream {
-		s.streamResponse(w, reply, chatID, model, now)
+		s.streamResponseFromAgent(w, r, ag, msg, chatID, model, now)
 	} else {
+		// Get reply from agent
+		reply := ag.HandleMessage(r.Context(), msg)
 		s.fullResponse(w, reply, chatID, model, now)
 	}
 }
 
-func (s *Server) streamResponse(w http.ResponseWriter, reply, chatID, model string, created int64) {
+func (s *Server) streamResponseFromAgent(w http.ResponseWriter, r *http.Request, ag *agent.Agent, msg bus.InboundMessage, chatID, model string, created int64) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -155,33 +153,36 @@ func (s *Server) streamResponse(w http.ResponseWriter, reply, chatID, model stri
 	w.WriteHeader(http.StatusOK)
 
 	flusher, ok := w.(http.Flusher)
-	if !ok {
-		// Fallback: send everything at once
-		s.writeSSEChunk(w, chatID, model, created, "assistant", reply, nil)
-		done := "stop"
-		s.writeSSEChunk(w, chatID, model, created, "", "", &done)
-		fmt.Fprint(w, "data: [DONE]\n\n")
-		return
-	}
+
+	sr := ag.HandleMessageStream(r.Context(), msg)
 
 	// Send role chunk
 	s.writeSSEChunk(w, chatID, model, created, "assistant", "", nil)
-	flusher.Flush()
-
-	// Split reply into words for streaming effect
-	words := splitIntoChunks(reply)
-	for _, word := range words {
-		s.writeSSEChunk(w, chatID, model, created, "", word, nil)
+	if ok {
 		flusher.Flush()
+	}
+
+	// Forward chunks from StreamReader
+	for {
+		chunk, more := sr.Next()
+		if chunk.Content != "" {
+			s.writeSSEChunk(w, chatID, model, created, "", chunk.Content, nil)
+			if ok {
+				flusher.Flush()
+			}
+		}
+		if chunk.Done || !more {
+			break
+		}
 	}
 
 	// Send finish chunk
 	done := "stop"
 	s.writeSSEChunk(w, chatID, model, created, "", "", &done)
-	flusher.Flush()
-
 	fmt.Fprint(w, "data: [DONE]\n\n")
-	flusher.Flush()
+	if ok {
+		flusher.Flush()
+	}
 }
 
 func (s *Server) writeSSEChunk(w http.ResponseWriter, id, model string, created int64, role, content string, finishReason *string) {
@@ -244,19 +245,3 @@ func (s *Server) resolveAgent(agentID string) *agent.Agent {
 	return nil
 }
 
-// splitIntoChunks splits text into word-level chunks preserving whitespace.
-func splitIntoChunks(text string) []string {
-	if text == "" {
-		return nil
-	}
-	words := strings.Fields(text)
-	chunks := make([]string, 0, len(words))
-	for i, w := range words {
-		if i > 0 {
-			chunks = append(chunks, " "+w)
-		} else {
-			chunks = append(chunks, w)
-		}
-	}
-	return chunks
-}

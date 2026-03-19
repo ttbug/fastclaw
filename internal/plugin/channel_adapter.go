@@ -3,6 +3,8 @@ package plugin
 import (
 	"context"
 	"log/slog"
+
+	"github.com/fastclaw-ai/fastclaw/internal/bus"
 )
 
 // ChannelAdapter wraps a channel plugin to implement the channels.Channel interface.
@@ -50,4 +52,14 @@ func (a *ChannelAdapter) Start(ctx context.Context) error {
 func (a *ChannelAdapter) Send(chatID string, text string) error {
 	ctx := context.Background()
 	return a.manager.SendToChannel(ctx, a.pluginID, chatID, text)
+}
+
+// SendMessage sends a rich outbound message. Plugin channels use plain text.
+func (a *ChannelAdapter) SendMessage(msg bus.OutboundMessage) error {
+	return a.Send(msg.ChatID, msg.Text)
+}
+
+// SendTyping is a no-op for plugin channels.
+func (a *ChannelAdapter) SendTyping(_ string) error {
+	return nil
 }

@@ -4,11 +4,25 @@ import "context"
 
 // Message represents a chat message.
 type Message struct {
-	Role       string      `json:"role"`
-	Content    string      `json:"content,omitempty"`
-	ToolCalls  []ToolCall  `json:"tool_calls,omitempty"`
-	ToolCallID string      `json:"tool_call_id,omitempty"`
-	Name       string      `json:"name,omitempty"`
+	Role         string        `json:"role"`
+	Content      string        `json:"content,omitempty"`
+	ContentParts []ContentPart `json:"content_parts,omitempty"`
+	ToolCalls    []ToolCall    `json:"tool_calls,omitempty"`
+	ToolCallID   string        `json:"tool_call_id,omitempty"`
+	Name         string        `json:"name,omitempty"`
+}
+
+// ContentPart represents a part of multimodal content.
+type ContentPart struct {
+	Type     string    `json:"type"`                // "text" or "image_url"
+	Text     string    `json:"text,omitempty"`
+	ImageURL *ImageURL `json:"image_url,omitempty"`
+}
+
+// ImageURL represents an image URL for vision messages.
+type ImageURL struct {
+	URL    string `json:"url"`
+	Detail string `json:"detail,omitempty"` // "auto", "low", "high"
 }
 
 // ToolCall represents a function call requested by the model.
@@ -48,7 +62,42 @@ func (r *Response) HasToolCalls() bool {
 	return len(r.ToolCalls) > 0
 }
 
+// StreamChunk represents a single chunk from a streaming response.
+type StreamChunk struct {
+	Content   string
+	ToolCalls []ToolCall
+	Done      bool
+}
+
+// StreamReader reads streaming chunks from an LLM response.
+type StreamReader struct {
+	ch  chan StreamChunk
+	err error
+}
+
+// NewStreamReader creates a new StreamReader with the given channel.
+func NewStreamReader(ch chan StreamChunk) *StreamReader {
+	return &StreamReader{ch: ch}
+}
+
+// Next returns the next chunk and whether more chunks are available.
+func (r *StreamReader) Next() (StreamChunk, bool) {
+	chunk, ok := <-r.ch
+	return chunk, ok
+}
+
+// Err returns any error that occurred during streaming.
+func (r *StreamReader) Err() error {
+	return r.err
+}
+
+// SetErr sets the error on the stream reader.
+func (r *StreamReader) SetErr(err error) {
+	r.err = err
+}
+
 // Provider is the LLM provider interface.
 type Provider interface {
 	Chat(ctx context.Context, messages []Message, tools []Tool, model string, maxTokens int, temperature float64) (*Response, error)
+	ChatStream(ctx context.Context, messages []Message, tools []Tool, model string, maxTokens int, temperature float64) (*StreamReader, error)
 }

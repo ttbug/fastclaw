@@ -83,6 +83,16 @@ func (s *Slack) Send(chatID string, text string) error {
 	return err
 }
 
+// SendMessage sends a rich outbound message. Slack uses plain text.
+func (s *Slack) SendMessage(msg bus.OutboundMessage) error {
+	return s.Send(msg.ChatID, msg.Text)
+}
+
+// SendTyping sends a typing indicator. Slack Socket Mode does not support this directly.
+func (s *Slack) SendTyping(_ string) error {
+	return nil
+}
+
 func (s *Slack) handleEvents(ctx context.Context) {
 	for {
 		select {

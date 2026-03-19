@@ -220,12 +220,34 @@ func New(cfg *config.Config) (*Gateway, error) {
 		if ag == nil {
 			return "", fmt.Errorf("agent %q not found", task.AgentID)
 		}
+
+		// Send typing indicator and keep sending every 5s until done
+		chanMgr.SendTyping(task.Message.Channel, task.AccountID, task.Message.ChatID)
+		typingDone := make(chan struct{})
+		go func() {
+			ticker := time.NewTicker(5 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-typingDone:
+					return
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					chanMgr.SendTyping(task.Message.Channel, task.AccountID, task.Message.ChatID)
+				}
+			}
+		}()
+
 		reply := ag.HandleMessage(ctx, task.Message)
+		close(typingDone)
+
 		mb.Outbound <- bus.OutboundMessage{
-			Channel:   task.Message.Channel,
-			AccountID: task.AccountID,
-			ChatID:    task.Message.ChatID,
-			Text:      reply,
+			Channel:      task.Message.Channel,
+			AccountID:    task.AccountID,
+			ChatID:       task.Message.ChatID,
+			Text:         reply,
+			ReplyToMsgID: task.Message.MessageID,
 		}
 		return reply, nil
 	})

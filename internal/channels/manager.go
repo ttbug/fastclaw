@@ -66,7 +66,7 @@ func (m *Manager) routeOutbound(ctx context.Context) {
 				slog.Warn("unknown outbound channel", "key", key)
 				continue
 			}
-			if err := ch.Send(msg.ChatID, msg.Text); err != nil {
+			if err := ch.SendMessage(msg); err != nil {
 				slog.Error("send message failed", "key", key, "error", err)
 			}
 		}
@@ -81,6 +81,18 @@ func (m *Manager) BotUsername(channel, accountID string) string {
 		return ""
 	}
 	return ch.BotUsername()
+}
+
+// SendTyping sends a typing indicator for the given channel and chat.
+func (m *Manager) SendTyping(channel, accountID, chatID string) {
+	key := channelKey(channel, accountID)
+	ch, ok := m.channels[key]
+	if !ok {
+		return
+	}
+	if err := ch.SendTyping(chatID); err != nil {
+		slog.Debug("send typing failed", "key", key, "error", err)
+	}
 }
 
 func channelKey(channel, accountID string) string {

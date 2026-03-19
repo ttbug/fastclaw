@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/fastclaw-ai/fastclaw/internal/agent/tools"
 	"github.com/fastclaw-ai/fastclaw/internal/bus"
@@ -195,7 +196,16 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 	runtimeCtx := a.ctxBuilder.BuildRuntimeContext(msg.Channel, msg.ChatID)
 	userContent := runtimeCtx + "\n\n" + msg.Text
 
-	sess.Append(provider.Message{Role: "user", Content: userContent})
+	// Build user message - include image if present
+	userMsg := provider.Message{Role: "user", Content: userContent}
+	if msg.PhotoURL != "" {
+		userMsg.Content = ""
+		userMsg.ContentParts = []provider.ContentPart{
+			{Type: "text", Text: userContent},
+			{Type: "image_url", ImageURL: &provider.ImageURL{URL: msg.PhotoURL, Detail: "auto"}},
+		}
+	}
+	sess.Append(userMsg)
 
 	// Context compaction: check if session messages are too large
 	sessionMsgs := sess.GetMessages()
@@ -338,6 +348,177 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 
 	slog.Warn("max tool iterations reached", "agent", a.name, "max", a.maxToolIterations)
 	return "I've reached the maximum number of tool iterations. Here's what I have so far."
+}
+
+// HandleMessageStream processes a message through the ReAct loop and returns
+// a StreamReader for the final response. Tool call iterations use non-streaming Chat;
+// the final text response uses ChatStream for true SSE streaming.
+func (a *Agent) HandleMessageStream(ctx context.Context, msg bus.InboundMessage) *provider.StreamReader {
+	// Reuse setup logic from HandleMessage
+	if result := a.handleSlashCommand(msg); result.handled {
+		ch := make(chan provider.StreamChunk, 2)
+		go func() {
+			ch <- provider.StreamChunk{Content: result.reply, Done: true}
+			close(ch)
+		}()
+		return provider.NewStreamReader(ch)
+	}
+
+	sess := a.sessions.Get(msg.Channel, msg.ChatID)
+	a.hooks.Run(ctx, &HookContext{AgentName: a.name, Point: BeforeSystemPrompt})
+	systemPrompt := a.ctxBuilder.BuildSystemPrompt()
+	a.hooks.Run(ctx, &HookContext{AgentName: a.name, Point: AfterSystemPrompt})
+
+	runtimeCtx := a.ctxBuilder.BuildRuntimeContext(msg.Channel, msg.ChatID)
+	userContent := runtimeCtx + "\n\n" + msg.Text
+
+	userMsg := provider.Message{Role: "user", Content: userContent}
+	if msg.PhotoURL != "" {
+		userMsg.Content = ""
+		userMsg.ContentParts = []provider.ContentPart{
+			{Type: "text", Text: userContent},
+			{Type: "image_url", ImageURL: &provider.ImageURL{URL: msg.PhotoURL, Detail: "auto"}},
+		}
+	}
+	sess.Append(userMsg)
+
+	sessionMsgs := sess.GetMessages()
+	compactResult, err := CompactMessages(sessionMsgs, a.workspacePath, a.provider, a.model)
+	if err != nil {
+		slog.Warn("compaction error", "agent", a.name, "error", err)
+	}
+	if compactResult != nil && compactResult.Pruned {
+		sess.ReplaceMessages(compactResult.Messages)
+		sessionMsgs = compactResult.Messages
+	}
+
+	messages := make([]provider.Message, 0, len(sessionMsgs)+1)
+	messages = append(messages, provider.Message{Role: "system", Content: systemPrompt})
+	messages = append(messages, sessionMsgs...)
+
+	toolDefs := a.registry.Definitions()
+
+	type toolCallSig struct {
+		name string
+		hash [32]byte
+	}
+	var lastSig toolCallSig
+	consecutiveCount := 0
+
+	// ReAct loop - use Chat for tool iterations
+	for i := 0; i < a.maxToolIterations; i++ {
+		hcBefore := &HookContext{AgentName: a.name, Point: BeforeModelCall, Messages: messages}
+		a.hooks.Run(ctx, hcBefore)
+
+		resp, err := a.provider.Chat(ctx, messages, toolDefs, a.model, a.maxTokens, a.temperature)
+
+		hcAfter := &HookContext{AgentName: a.name, Point: AfterModelCall, Messages: messages, Response: resp, Error: err, StartTime: hcBefore.StartTime}
+		a.hooks.Run(ctx, hcAfter)
+
+		if err != nil {
+			slog.Error("LLM chat failed", "agent", a.name, "error", err)
+			return a.stringStream("Sorry, I encountered an error processing your request.")
+		}
+
+		if !resp.HasToolCalls() {
+			// Final response - use streaming
+			sr, err := a.provider.ChatStream(ctx, messages, toolDefs, a.model, a.maxTokens, a.temperature)
+			if err != nil {
+				slog.Error("LLM stream failed, falling back", "agent", a.name, "error", err)
+				sess.Append(provider.Message{Role: "assistant", Content: resp.Content})
+				return a.stringStream(resp.Content)
+			}
+
+			// Collect content in background for session storage
+			outCh := make(chan provider.StreamChunk, 64)
+			outReader := provider.NewStreamReader(outCh)
+			go func() {
+				defer close(outCh)
+				var full strings.Builder
+				for {
+					chunk, ok := sr.Next()
+					if !ok {
+						break
+					}
+					if chunk.Content != "" {
+						full.WriteString(chunk.Content)
+					}
+					select {
+					case outCh <- chunk:
+					case <-ctx.Done():
+						return
+					}
+				}
+				sess.Append(provider.Message{Role: "assistant", Content: full.String()})
+			}()
+			return outReader
+		}
+
+		// Tool calls - process synchronously
+		assistantMsg := provider.Message{
+			Role:      "assistant",
+			Content:   resp.Content,
+			ToolCalls: resp.ToolCalls,
+		}
+		sess.Append(assistantMsg)
+		messages = append(messages, assistantMsg)
+
+		loopDetected := false
+		for _, tc := range resp.ToolCalls {
+			sig := toolCallSig{
+				name: tc.Function.Name,
+				hash: sha256.Sum256([]byte(tc.Function.Arguments)),
+			}
+			if sig.name == lastSig.name && sig.hash == lastSig.hash {
+				consecutiveCount++
+			} else {
+				consecutiveCount = 1
+				lastSig = sig
+			}
+			if consecutiveCount >= 3 {
+				slog.Warn("tool loop detected", "agent", a.name, "tool", tc.Function.Name)
+				warnMsg := provider.Message{
+					Role:    "system",
+					Content: "Loop detected: you called the same tool with the same arguments 3 times. Please try a different approach.",
+				}
+				sess.Append(warnMsg)
+				messages = append(messages, warnMsg)
+				loopDetected = true
+				break
+			}
+
+			hcToolBefore := &HookContext{AgentName: a.name, Point: BeforeToolCall, ToolName: tc.Function.Name, ToolArgs: tc.Function.Arguments}
+			a.hooks.Run(ctx, hcToolBefore)
+
+			result, execErr := a.registry.Execute(ctx, tc.Function.Name, tc.Function.Arguments)
+
+			hcToolAfter := &HookContext{AgentName: a.name, Point: AfterToolCall, ToolName: tc.Function.Name, ToolResult: result, Error: execErr, StartTime: hcToolBefore.StartTime}
+			a.hooks.Run(ctx, hcToolAfter)
+
+			if execErr != nil {
+				slog.Warn("tool execution error", "agent", a.name, "name", tc.Function.Name, "error", execErr)
+			}
+
+			toolMsg := provider.Message{Role: "tool", Content: result, ToolCallID: tc.ID, Name: tc.Function.Name}
+			sess.Append(toolMsg)
+			messages = append(messages, toolMsg)
+		}
+		if loopDetected {
+			break
+		}
+	}
+
+	return a.stringStream("I've reached the maximum number of tool iterations. Here's what I have so far.")
+}
+
+// stringStream creates a StreamReader that yields a single string.
+func (a *Agent) stringStream(text string) *provider.StreamReader {
+	ch := make(chan provider.StreamChunk, 2)
+	go func() {
+		ch <- provider.StreamChunk{Content: text, Done: true}
+		close(ch)
+	}()
+	return provider.NewStreamReader(ch)
 }
 
 // WorkspacePath returns the agent's workspace directory.

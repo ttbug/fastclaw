@@ -93,6 +93,16 @@ func (d *Discord) Send(chatID string, text string) error {
 	return nil
 }
 
+// SendMessage sends a rich outbound message. Discord uses plain text with basic fallback.
+func (d *Discord) SendMessage(msg bus.OutboundMessage) error {
+	return d.Send(msg.ChatID, msg.Text)
+}
+
+// SendTyping sends a typing indicator to the Discord channel.
+func (d *Discord) SendTyping(chatID string) error {
+	return d.session.ChannelTyping(chatID)
+}
+
 func (d *Discord) onMessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 	// Ignore own messages
 	if m.Author.ID == d.botUserID {

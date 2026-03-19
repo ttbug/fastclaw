@@ -1,6 +1,10 @@
 package channels
 
-import "context"
+import (
+	"context"
+
+	"github.com/fastclaw-ai/fastclaw/internal/bus"
+)
 
 // Channel is the interface that all channel implementations must satisfy.
 type Channel interface {
@@ -13,6 +17,10 @@ type Channel interface {
 	BotUsername() string
 	// Start begins listening for messages. It should block until ctx is cancelled.
 	Start(ctx context.Context) error
-	// Send sends a message to the specified chat.
+	// Send sends a plain text message to the specified chat.
 	Send(chatID string, text string) error
+	// SendMessage sends a rich outbound message with formatting, reply-to, buttons, etc.
+	SendMessage(msg bus.OutboundMessage) error
+	// SendTyping sends a typing indicator to the specified chat.
+	SendTyping(chatID string) error
 }
