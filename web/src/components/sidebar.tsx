@@ -11,7 +11,7 @@ import {
   Radio,
   Clock,
   Settings,
-  Zap,
+
   Menu,
   X,
   Sun,
@@ -81,8 +81,8 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
       <aside className="hidden w-60 flex-col border-r border-border bg-card/50 md:flex">
         {/* Logo + status */}
         <div className="flex h-14 items-center gap-2.5 border-b border-border px-4">
-          <div className="relative flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-violet-600 to-cyan-500">
-            <Zap className="h-4 w-4 text-white" />
+          <div className="relative flex h-8 w-8 items-center justify-center">
+            <img src="/logo.png" alt="FastClaw" className="h-8 w-8 rounded-lg" />
             <span
               className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-card ${
                 gatewayRunning
@@ -129,8 +129,8 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
       {/* Mobile header */}
       <div className="fixed top-0 left-0 right-0 z-40 flex h-12 items-center justify-between border-b border-border bg-card/95 px-4 backdrop-blur-sm md:hidden">
         <div className="flex items-center gap-2">
-          <div className="relative flex h-7 w-7 items-center justify-center rounded-md bg-gradient-to-br from-violet-600 to-cyan-500">
-            <Zap className="h-3.5 w-3.5 text-white" />
+          <div className="relative flex h-7 w-7 items-center justify-center">
+            <img src="/logo.png" alt="FastClaw" className="h-7 w-7 rounded-md" />
             <span
               className={`absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full border-[1.5px] border-card ${
                 gatewayRunning ? "bg-emerald-500" : "bg-muted-foreground/40"

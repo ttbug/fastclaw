@@ -25,25 +25,13 @@ import { Textarea } from "@/components/ui/textarea";
 import { testProvider, saveConfig } from "@/lib/api";
 
 const PROVIDERS: Record<string, { apiBase: string; models: string[] }> = {
-  openai: {
-    apiBase: "https://api.openai.com/v1",
-    models: ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo"],
-  },
   openrouter: {
     apiBase: "https://openrouter.ai/api/v1",
     models: [
-      "openai/gpt-4o",
-      "anthropic/claude-3.5-sonnet",
-      "google/gemini-pro-1.5",
+      "openai/gpt-5.4",
+      "anthropic/claude-sonnet-4.6",
+      "google/gemini-3.1-flash-lite-preview",
     ],
-  },
-  deepseek: {
-    apiBase: "https://api.deepseek.com/v1",
-    models: ["deepseek-chat", "deepseek-coder"],
-  },
-  groq: {
-    apiBase: "https://api.groq.com/openai/v1",
-    models: ["llama-3.3-70b-versatile", "mixtral-8x7b-32768"],
   },
   ollama: {
     apiBase: "http://localhost:11434/v1",
@@ -54,6 +42,7 @@ const PROVIDERS: Record<string, { apiBase: string; models: string[] }> = {
 
 interface OnboardConfig {
   provider: string;
+  providerName: string;
   apiBase: string;
   apiKey: string;
   model: string;
@@ -116,14 +105,15 @@ export default function OnboardPage() {
   const router = useRouter();
   const [step, setStep] = useState(0);
   const [config, setConfig] = useState<OnboardConfig>({
-    provider: "openai",
-    apiBase: "https://api.openai.com/v1",
+    provider: "openrouter",
+    providerName: "openrouter",
+    apiBase: "https://openrouter.ai/api/v1",
     apiKey: "",
-    model: "gpt-4o",
-    telegramEnabled: true,
+    model: "openai/gpt-5.4",
+    telegramEnabled: false,
     telegramToken: "",
     port: 18953,
-    agentName: "FastClaw Agent",
+    agentName: "FastClaw",
     personality:
       "You are a helpful, friendly AI assistant. You respond concisely and accurately.",
   });
@@ -153,6 +143,7 @@ export default function OnboardPage() {
       const preset = PROVIDERS[provider];
       updateConfig({
         provider,
+        providerName: provider === "custom" ? "" : provider,
         apiBase: preset.apiBase,
         model: preset.models[0] || "",
       });
@@ -188,7 +179,10 @@ export default function OnboardPage() {
       setShowConfetti(true);
       setLaunched(true);
       setTimeout(() => setShowConfetti(false), 4000);
-      setTimeout(() => router.push("/overview/"), 2000);
+      setTimeout(() => {
+        const port = config.port || window.location.port;
+        window.location.href = `http://localhost:${port}/overview/`;
+      }, 3000);
     } catch {
       setLaunched(true);
       setShowConfetti(true);
@@ -274,20 +268,8 @@ export default function OnboardPage() {
         {step === 0 && (
           <Card className="backdrop-blur-sm">
             <CardHeader className="space-y-6 pb-4 text-center">
-              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-violet-600 to-cyan-500 shadow-lg shadow-violet-500/20">
-                <svg
-                  className="h-8 w-8 text-white"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth={1.5}
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z"
-                  />
-                </svg>
+              <div className="mx-auto flex h-16 w-16 items-center justify-center">
+                <img src="/logo.png" alt="FastClaw" className="h-16 w-16 rounded-2xl" />
               </div>
               <div>
                 <CardTitle className="text-3xl font-bold">
@@ -295,9 +277,6 @@ export default function OnboardPage() {
                     FastClaw
                   </span>
                 </CardTitle>
-                <CardDescription className="mt-3 text-base">
-                  AI Agent Framework
-                </CardDescription>
               </div>
             </CardHeader>
             <CardContent className="space-y-6 text-center">
@@ -305,21 +284,6 @@ export default function OnboardPage() {
                 Set up your AI agent in a few simple steps. Configure your LLM
                 provider, connect messaging channels, and launch your agent.
               </p>
-              <Separator />
-              <div className="grid grid-cols-3 gap-4 text-center">
-                <div>
-                  <p className="text-2xl font-bold text-violet-500">6+</p>
-                  <p className="text-xs text-muted-foreground">LLM Providers</p>
-                </div>
-                <div>
-                  <p className="text-2xl font-bold text-cyan-500">Multi</p>
-                  <p className="text-xs text-muted-foreground">Agent Support</p>
-                </div>
-                <div>
-                  <p className="text-2xl font-bold text-emerald-500">MCP</p>
-                  <p className="text-xs text-muted-foreground">Tool Protocol</p>
-                </div>
-              </div>
               <Button
                 onClick={() => setStep(1)}
                 className="w-full"
@@ -372,6 +336,18 @@ export default function OnboardPage() {
                 </Select>
               </div>
 
+              {config.provider === "custom" && (
+                <div className="space-y-2">
+                  <Label>Provider Name</Label>
+                  <Input
+                    value={config.providerName}
+                    onChange={(e) => updateConfig({ providerName: e.target.value })}
+                    placeholder="e.g. my-provider"
+                    className="font-mono text-sm"
+                  />
+                </div>
+              )}
+
               <div className="space-y-2">
                 <Label>API Base URL</Label>
                 <Input
@@ -399,82 +375,81 @@ export default function OnboardPage() {
 
               <div className="space-y-2">
                 <Label>Model</Label>
-                {PROVIDERS[config.provider]?.models.length > 0 ? (
-                  <Select
-                    value={config.model}
-                    onValueChange={(v: string | null) => v && updateConfig({ model: v })}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {PROVIDERS[config.provider].models.map((m) => (
-                        <SelectItem key={m} value={m}>
-                          {m}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                ) : (
-                  <Input
-                    value={config.model}
-                    onChange={(e) => updateConfig({ model: e.target.value })}
-                    placeholder="Enter model name"
-                    className="font-mono text-sm"
-                  />
+                <Input
+                  value={config.model}
+                  onChange={(e) => updateConfig({ model: e.target.value })}
+                  placeholder="Enter model name"
+                  className="font-mono text-sm"
+                />
+                {PROVIDERS[config.provider]?.models.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {PROVIDERS[config.provider].models.map((m) => (
+                      <button
+                        key={m}
+                        type="button"
+                        onClick={() => updateConfig({ model: m })}
+                        className={`rounded-md border px-2 py-0.5 text-xs font-mono transition-colors ${
+                          config.model === m
+                            ? "border-primary bg-primary/10 text-primary"
+                            : "border-border text-muted-foreground hover:border-primary/50 hover:text-foreground"
+                        }`}
+                      >
+                        {m}
+                      </button>
+                    ))}
+                  </div>
                 )}
               </div>
 
               <Separator />
 
-              <div className="flex items-center gap-3">
-                <Button
-                  variant="outline"
-                  onClick={handleTestConnection}
-                  disabled={testStatus === "testing"}
-                >
-                  {testStatus === "testing" ? (
-                    <>
-                      <svg
-                        className="mr-2 h-4 w-4 animate-spin"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                      >
-                        <circle
-                          className="opacity-25"
-                          cx="12"
-                          cy="12"
-                          r="10"
-                          stroke="currentColor"
-                          strokeWidth="4"
-                        />
-                        <path
-                          className="opacity-75"
-                          fill="currentColor"
-                          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-                        />
-                      </svg>
-                      Testing...
-                    </>
-                  ) : (
-                    "Test Connection"
+              <div className="space-y-2">
+                <div className="flex items-center gap-3">
+                  <Button
+                    variant="outline"
+                    onClick={handleTestConnection}
+                    disabled={testStatus === "testing"}
+                  >
+                    {testStatus === "testing" ? (
+                      <>
+                        <svg
+                          className="mr-2 h-4 w-4 animate-spin"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                        >
+                          <circle
+                            className="opacity-25"
+                            cx="12"
+                            cy="12"
+                            r="10"
+                            stroke="currentColor"
+                            strokeWidth="4"
+                          />
+                          <path
+                            className="opacity-75"
+                            fill="currentColor"
+                            d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                          />
+                        </svg>
+                        Testing...
+                      </>
+                    ) : (
+                      "Test Connection"
+                    )}
+                  </Button>
+                  {testStatus === "success" && (
+                    <Badge
+                      variant="outline"
+                      className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20"
+                    >
+                      Connected
+                    </Badge>
                   )}
-                </Button>
-                {testStatus === "success" && (
-                  <Badge
-                    variant="outline"
-                    className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20"
-                  >
-                    Connected
-                  </Badge>
-                )}
+                </div>
                 {testStatus === "error" && (
-                  <Badge
-                    variant="outline"
-                    className="bg-destructive/10 text-destructive border-destructive/20"
-                  >
-                    {testError || "Failed"}
-                  </Badge>
+                  <p className="text-sm text-destructive break-all">
+                    {testError || "Connection failed"}
+                  </p>
                 )}
               </div>
 
@@ -497,7 +472,11 @@ export default function OnboardPage() {
             </CardHeader>
             <CardContent className="space-y-5">
               <div className="rounded-lg border border-border bg-muted/30 p-4">
-                <div className="flex items-center justify-between">
+                <button
+                  type="button"
+                  onClick={() => updateConfig({ telegramEnabled: !config.telegramEnabled })}
+                  className="flex w-full items-center justify-between text-left"
+                >
                   <div className="flex items-center gap-3">
                     <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-500/10">
                       <svg
@@ -525,7 +504,7 @@ export default function OnboardPage() {
                   >
                     {config.telegramEnabled ? "Enabled" : "Disabled"}
                   </Badge>
-                </div>
+                </button>
 
                 {config.telegramEnabled && (
                   <div className="mt-4 space-y-2">

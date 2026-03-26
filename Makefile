@@ -1,4 +1,4 @@
-.PHONY: build build-web clean release-local install test
+.PHONY: build build-web clean release-local install test dev
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
@@ -19,8 +19,11 @@ install: build
 test:
 	go test ./...
 
+dev: build-web
+	air
+
 clean:
-	rm -rf bin/ dist/
+	rm -rf bin/ dist/ tmp/
 
 # Build all platforms
 release-local: build-web

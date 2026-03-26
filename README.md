@@ -21,7 +21,7 @@ A lightweight, self-hosted AI Agent framework written in Go.
 FastClaw is a self-hosted AI agent runtime. It connects your LLM to chat platforms, executes tools, manages memory, and runs scheduled tasks — all from a single Go binary with zero dependencies.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/fastclaw-ai/fastclaw/dev/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/fastclaw-ai/fastclaw/main/install.sh | bash
 fastclaw    # Opens setup wizard in browser
 ```
 
@@ -30,7 +30,7 @@ fastclaw    # Opens setup wizard in browser
 **One-liner (macOS / Linux):**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/fastclaw-ai/fastclaw/dev/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/fastclaw-ai/fastclaw/main/install.sh | bash
 ```
 
 **Windows:** Download `.zip` from [Releases](https://github.com/fastclaw-ai/fastclaw/releases), extract, double-click `fastclaw.exe`.
@@ -51,7 +51,7 @@ cd fastclaw && make build
 ## 🚀 Quick Start
 
 1. Run `fastclaw` — browser opens the setup wizard at `http://localhost:18953`
-2. Pick your LLM provider (OpenAI, OpenRouter, DeepSeek, Groq, Ollama...)
+2. Pick your LLM provider (OpenRouter, Ollama, or custom)
 3. Add a Telegram bot token (optional)
 4. Click Launch ⚡
 
@@ -331,6 +331,7 @@ cd fastclaw
 
 make build          # Build binary
 make build-web      # Build web UI
+make dev            # Dev mode with hot reload
 make release-local  # Build all platforms
 make test           # Run tests
 ```

@@ -195,14 +195,23 @@ func runSetupWizard(port int) error {
 
 	srv := setup.NewServer(port, func(cfg *config.Config) {
 		slog.Info("setup complete, config saved")
-		cancel()
+		// Stop the setup wizard and restart as gateway
+		go func() {
+			cancel()
+		}()
 	})
 
 	// Open browser
 	url := fmt.Sprintf("http://localhost:%d", port)
 	go openBrowser(url)
 
-	return srv.Run(ctx)
+	if err := srv.Run(ctx); err != nil {
+		return err
+	}
+
+	// Config was saved, now start the gateway
+	slog.Info("restarting as gateway")
+	return runGateway(port)
 }
 
 func openBrowser(url string) {

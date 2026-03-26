@@ -217,6 +217,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 
 type saveConfigRequest struct {
 	Provider        string `json:"provider"`
+	ProviderName    string `json:"providerName"`
 	APIBase         string `json:"apiBase"`
 	APIKey          string `json:"apiKey"`
 	Model           string `json:"model"`
@@ -234,10 +235,22 @@ func (s *Server) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Normalize agent name to slug: lowercase, spaces/underscores to hyphens
+	agentID := strings.ToLower(strings.TrimSpace(req.AgentName))
+	agentID = strings.ReplaceAll(agentID, " ", "-")
+	agentID = strings.ReplaceAll(agentID, "_", "-")
+
+	// Determine provider key
+	providerKey := req.Provider
+	if req.Provider == "custom" && req.ProviderName != "" {
+		providerKey = strings.ToLower(strings.TrimSpace(req.ProviderName))
+		providerKey = strings.ReplaceAll(providerKey, " ", "-")
+	}
+
 	// Build config
 	cfg := &config.Config{
 		Providers: map[string]config.ProviderConfig{
-			"default": {
+			providerKey: {
 				APIKey:  req.APIKey,
 				APIBase: req.APIBase,
 			},
@@ -250,16 +263,11 @@ func (s *Server) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 				MaxToolIterations: 20,
 			},
 			List: []config.AgentEntry{
-				{ID: req.AgentName},
+				{ID: agentID},
 			},
 		},
 		Channels: map[string]config.ChannelConfig{},
-		Bindings: []config.Binding{
-			{
-				AgentID: req.AgentName,
-				Match:   config.Match{Channel: "telegram"},
-			},
-		},
+		Bindings: []config.Binding{},
 	}
 
 	// Auto-generate a gateway auth token
@@ -275,6 +283,10 @@ func (s *Server) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 			Enabled:  true,
 			BotToken: req.TelegramToken,
 		}
+		cfg.Bindings = append(cfg.Bindings, config.Binding{
+			AgentID: agentID,
+			Match:   config.Match{Channel: "telegram"},
+		})
 	}
 
 	// Ensure home dir exists
@@ -297,7 +309,7 @@ func (s *Server) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create agent workspace
-	agentDir := filepath.Join(homeDir, "agents", req.AgentName, "agent")
+	agentDir := filepath.Join(homeDir, "agents", agentID, "agent")
 	dirs := []string{
 		agentDir,
 		filepath.Join(agentDir, "memory"),
@@ -311,7 +323,7 @@ func (s *Server) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 	// Write bootstrap files
 	bootstrapFiles := map[string]string{
 		"AGENTS.md":    "# Agent Capabilities\n\nDescribe what this agent can do.\n",
-		"IDENTITY.md":  fmt.Sprintf("# Identity\n\nYou are %s, a FastClaw AI agent.\n", req.AgentName),
+		"IDENTITY.md":  fmt.Sprintf("# Identity\n\nYou are %s, a FastClaw AI agent.\n", req.AgentName),  // use display name
 		"USER.md":      "# User\n\nInformation about the user you serve.\n",
 		"TOOLS.md":     "# Tools\n\nAdditional tool usage instructions.\n",
 		"BOOTSTRAP.md": "# Bootstrap\n\nStartup instructions loaded on every conversation.\n",
@@ -339,7 +351,7 @@ func (s *Server) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 		os.WriteFile(agentJSONPath, agentData, 0o644)
 	}
 
-	slog.Info("config saved", "path", configPath, "agent", req.AgentName)
+	slog.Info("config saved", "path", configPath, "agent", agentID)
 
 	jsonResponse(w, http.StatusOK, map[string]any{"ok": true})
 

@@ -134,14 +134,13 @@ main() {
   info "Version: ${VERSION}"
 
   install
-  init_config
 
   echo ""
   info "✅ FastClaw installed successfully!"
   echo ""
   echo "  Next steps:"
-  echo "    1. Edit ~/.fastclaw/fastclaw.json (add API key + bot token)"
-  echo "    2. Run: fastclaw gateway"
+  echo "    Run: fastclaw"
+  echo "    This will open the setup wizard in your browser."
   echo ""
 }
 
