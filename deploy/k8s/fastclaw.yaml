@@ -78,6 +78,12 @@ data:
   FASTCLAW_STORAGE_TYPE: "postgres"
   FASTCLAW_STORAGE_AUTO_MIGRATE: "true"
 
+  # Server default timezone (IANA name) — the LAST fallback in the chain
+  # chatter pref → agent default → system default → TZ. Without it pods
+  # run UTC, so agents whose chatters never set a timezone see UTC wall
+  # clocks and get UTC-fired schedules.
+  TZ: "Asia/Shanghai"
+
   # ─── Provider 1: Aliyun OSS (default example) ───
   FASTCLAW_OBJECT_STORE_TYPE: "aliyun-oss"
   FASTCLAW_OBJECT_STORE_REGION: "cn-hangzhou"
