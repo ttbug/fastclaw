@@ -363,6 +363,7 @@ func (s *Server) Run(ctx context.Context) error {
 	// Per-agent cron jobs (DB-backed, includes anything the agent
 	// scheduled itself via create_cron_job at runtime).
 	mux.HandleFunc("GET /api/agents/{id}/cron", auth(s.handleListAgentCronJobs))
+	mux.HandleFunc("POST /api/agents/{id}/cron", auth(s.handleCreateAgentCronJob))
 	mux.HandleFunc("DELETE /api/agents/{id}/cron/{jobId}", auth(s.handleDeleteAgentCronJob))
 	mux.HandleFunc("PUT /api/agents/{id}/cron/{jobId}", auth(s.handleToggleAgentCronJob))
 

@@ -1666,6 +1666,32 @@ export async function toggleAgentCronJob(
   return res.json();
 }
 
+// CreateAgentCronJobInput is the manual-create counterpart to the
+// agent's create_cron_job tool. channel/chatId pick the delivery target
+// (a form has no originating turn to inherit them from) — the UI sources
+// them from one of the agent's existing chat sessions.
+export interface CreateAgentCronJobInput {
+  name: string;
+  type: string; // "cron" | "interval" | "once"
+  schedule: string;
+  message: string;
+  channel: string;
+  chatId: string;
+  accountId?: string;
+}
+
+export async function createAgentCronJob(
+  agentId: string,
+  input: CreateAgentCronJobInput,
+): Promise<{ ok: boolean; job?: AgentCronJob; error?: string }> {
+  const res = await apiFetch(`/api/agents/${agentId}/cron`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return res.json();
+}
+
 export type MCPServerType = "http" | "stdio";
 
 export interface AgentMCPServer {

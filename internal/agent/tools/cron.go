@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/fastclaw-ai/fastclaw/internal/cron"
@@ -117,34 +116,13 @@ func makeCreateCronJob(st store.Store, r *Registry, userID, agentID string) Tool
 		id := generateUUID()
 		now := time.Now()
 
-		// Calculate NextRun based on type
-		var nextRun time.Time
-		switch jobType {
-		case "once":
-			t, err := time.Parse(time.RFC3339, args.Schedule)
-			if err != nil {
-				// No explicit offset — interpret in the chatter's zone.
-				t, err = time.ParseInLocation("2006-01-02T15:04:05", args.Schedule, loc)
-				if err != nil {
-					return "", fmt.Errorf("once schedule must be ISO datetime (e.g. 2026-05-06T15:30:00), got: %q", args.Schedule)
-				}
-			}
-			if t.Before(now) {
-				return "", fmt.Errorf("schedule is in the past: %s", args.Schedule)
-			}
-			nextRun = t
-		case "interval":
-			sched := strings.TrimPrefix(args.Schedule, "every ")
-			dur, err := time.ParseDuration(sched)
-			if err != nil {
-				return "", fmt.Errorf("invalid interval (e.g. '30m', '1h', 'every 2h'): %q", args.Schedule)
-			}
-			nextRun = now.Add(dur)
-		default:
-			// cron expression — first occurrence in the chatter's zone.
-			// (Previously nextRun=now, which fired the job once
-			// immediately on creation — a spurious reminder.)
-			nextRun = cron.NextOccurrenceIn(args.Schedule, now, loc)
+		// Calculate NextRun based on type. Shared with the dashboard's
+		// manual-create handler via cron.ComputeFirstRun so the two
+		// creation paths can't drift; it also rejects malformed cron
+		// expressions instead of silently scheduling now+1h.
+		nextRun, err := cron.ComputeFirstRun(jobType, args.Schedule, now, loc)
+		if err != nil {
+			return "", err
 		}
 
 		job := &store.CronJobRecord{
