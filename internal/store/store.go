@@ -440,6 +440,7 @@ const (
 	KindProvider = "provider"
 	KindChannel  = "channel"
 	KindSetting  = "setting"
+	KindMCP      = "mcp"
 )
 
 // ConfigRecord is one row of the configs table — the unified
