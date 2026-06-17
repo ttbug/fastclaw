@@ -65,11 +65,12 @@ function extractAgentId(pathname: string): string | null {
 //   User        Users · Chats · Token Usage · API Keys — admin platform tools
 //   (no label)  Settings                              — opens the user dialog
 //
-// Skills / Tools and the Users/Chats/Token-Usage admin entries are
-// admin-only. Non-admin sees the Agent group with just Agents + Models,
-// and a slim User group with API Keys. Settings is a click-only item —
-// its onClick is attached at render time so it can call into component
-// state.
+// The agent-scoped "Skills" entry points at /user-skills/ for non-admin
+// callers (their personal bucket, visible across all their agents) and
+// at /skills/ for admins (global, shared across every user). Tools and
+// the Users/Chats/Token-Usage entries stay admin-only. Settings is a
+// click-only item — its onClick is attached at render time so it can
+// call into component state.
 const OVERVIEW_ITEM: NavItem = {
   title: "Overview",
   url: "/overview/",
@@ -79,6 +80,7 @@ const OVERVIEW_ITEM: NavItem = {
 const USER_AGENT_GROUP: NavItem[] = [
   { title: "Agents", url: "/agents/", icon: BotIcon },
   { title: "Models", url: "/models/", icon: BrainIcon },
+  { title: "Skills", url: "/user-skills/", icon: SparklesIcon },
 ];
 
 const ADMIN_AGENT_GROUP: NavItem[] = [

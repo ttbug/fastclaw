@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/fastclaw-ai/fastclaw/internal/agent"
+	"github.com/fastclaw-ai/fastclaw/internal/auth"
 	"github.com/fastclaw-ai/fastclaw/internal/config"
 	"github.com/fastclaw-ai/fastclaw/internal/skills"
 )
@@ -194,6 +195,86 @@ func (s *Server) handleDeleteAgentSkill(w http.ResponseWriter, r *http.Request) 
 	// Hot-reload the agent so the removed skill drops out of its context.
 	if ag := s.resolveAgent(r, id); ag != nil {
 		ag.ReloadWorkspaceFiles()
+	}
+	jsonResponse(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleListMySkills lists the caller's own per-user skills
+// (~/.fastclaw/users/<uid>/skills/). Each chatter has one bucket;
+// skills in it shadow host-managed entries on every agent the user
+// chats with but stay isolated from other chatters' buckets.
+func (s *Server) handleListMySkills(w http.ResponseWriter, r *http.Request) {
+	ident, ok := auth.FromContext(r.Context())
+	if !ok || ident.EffectiveUserID() == "" {
+		jsonResponse(w, http.StatusUnauthorized, map[string]any{"ok": false, "error": "unauthorized"})
+		return
+	}
+	uid := ident.EffectiveUserID()
+	homeDir, err := config.HomeDir()
+	if err != nil {
+		jsonResponse(w, http.StatusOK, []any{})
+		return
+	}
+	skillsDir := filepath.Join(homeDir, "users", uid, "skills")
+	// Mirror from object store so a skill the user created on a sibling
+	// pod shows up here. Mirror-up symmetry with the personal loader
+	// layer isn't needed on a list call — the per-user path is
+	// bind-mounted in sandboxes, so anything the agent wrote this
+	// session is already local; we only need to pull remote deltas.
+	if s.workspaceStore != nil {
+		if err := skills.HydrateSkillsDown(
+			r.Context(), s.workspaceStore, skills.UserSkillOwner(uid), skillsDir,
+		); err != nil {
+			slog.Warn("failed to hydrate user skills from object store",
+				"user", uid, "error", err)
+		}
+	}
+	out := scanSkillsDir(skillsDir)
+	if out == nil {
+		jsonResponse(w, http.StatusOK, []any{})
+		return
+	}
+	jsonResponse(w, http.StatusOK, out)
+}
+
+// handleDeleteMySkill removes a skill from the caller's personal bucket
+// only. The path is keyed off the auth context, not the URL, so one
+// chatter cannot delete another chatter's skill by guessing the name.
+func (s *Server) handleDeleteMySkill(w http.ResponseWriter, r *http.Request) {
+	if !s.requireWritable(w, r) {
+		return
+	}
+	ident, ok := auth.FromContext(r.Context())
+	if !ok || ident.EffectiveUserID() == "" {
+		jsonResponse(w, http.StatusUnauthorized, map[string]any{"ok": false, "error": "unauthorized"})
+		return
+	}
+	uid := ident.EffectiveUserID()
+	name := r.PathValue("name")
+	if name == "" {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "name required"})
+		return
+	}
+	homeDir, err := config.HomeDir()
+	if err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	skillPath := filepath.Join(homeDir, "users", uid, "skills", name)
+	if err := os.RemoveAll(skillPath); err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	// Drop the skill from the shared object store so other pods lose
+	// it on their next hydrate. Best-effort: a stale remote copy will
+	// re-appear next reload, which is annoying but not unsafe.
+	if s.workspaceStore != nil {
+		if derr := skills.DeleteSkillUp(
+			r.Context(), s.workspaceStore, skills.UserSkillOwner(uid), name,
+		); derr != nil {
+			slog.Warn("failed to remove user skill from object store",
+				"user", uid, "skill", name, "error", derr)
+		}
 	}
 	jsonResponse(w, http.StatusOK, map[string]any{"ok": true})
 }

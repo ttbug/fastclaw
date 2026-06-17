@@ -358,6 +358,12 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("DELETE /api/skills/{name}", admin(s.handleDeleteSkill))
 	mux.HandleFunc("GET /api/agents/{id}/skills", auth(s.handleListAgentSkills))
 	mux.HandleFunc("DELETE /api/agents/{id}/skills/{name}", auth(s.handleDeleteAgentSkill))
+	// Per-user skills: each chatter's personal bucket at
+	// ~/.fastclaw/users/<uid>/skills/. Visible across every agent the
+	// user chats with, isolated from other chatters. Complements the
+	// global (admin-only) and per-agent (owner-only) skills surfaces.
+	mux.HandleFunc("GET /api/me/skills", auth(s.handleListMySkills))
+	mux.HandleFunc("DELETE /api/me/skills/{name}", auth(s.handleDeleteMySkill))
 
 	// Plugins (super_admin only).
 	mux.HandleFunc("GET /api/plugins", admin(s.handleListPlugins))
