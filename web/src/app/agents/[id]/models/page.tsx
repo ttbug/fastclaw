@@ -30,7 +30,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Switch } from "@/components/ui/switch";
-import { Brain, Plus, Pencil, Trash2, Check, Cpu, Loader2, Share2 } from "lucide-react";
+import { Brain, Plus, Pencil, Trash2, Check, Cpu, Loader2, Share2, Repeat } from "lucide-react";
 import {
   getAgent,
   getConfig,
@@ -140,6 +140,7 @@ export default function AgentModelsPage() {
   // window before fetchAll resolves. Backend treats absent key as on
   // (agentShareModelConfig in handlers_agents.go) — keep these aligned.
   const [shareModelConfig, setShareModelConfig] = useState(true);
+  const [maxToolIterations, setMaxToolIterations] = useState(0);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -245,6 +246,7 @@ export default function AgentModelsPage() {
       // type from before per-agent overrides moved out of the merged
       // config; the Go side never populates it.
       setModel(agentRec?.model || "");
+      setMaxToolIterations(agentRec?.maxToolIterations || 0);
       // Backend always emits a definitive boolean (see agentShareModelConfig);
       // the ?? guards against a stale shape if the page is hit before
       // the binary upgrade lands.
@@ -510,6 +512,16 @@ export default function AgentModelsPage() {
     }
   };
 
+  const handleMaxToolIterationsBlur = async () => {
+    setSaving(true);
+    try {
+      await updateAgent(agentId, { maxToolIterations: maxToolIterations || 0 });
+      flashSaved();
+    } finally {
+      setSaving(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="p-6 space-y-6 max-w-5xl mx-auto">
@@ -660,6 +672,61 @@ export default function AgentModelsPage() {
               )}
             </>
           )}
+        </p>
+      </div>
+
+      {/* Max Tool Iterations */}
+      <div className="rounded-lg border border-border bg-card p-5">
+        <div className="flex items-center justify-between gap-2 mb-3">
+          <div className="flex items-center gap-2">
+            <Repeat className="h-4 w-4 text-primary" />
+            <h3 className="font-medium">Tool Iterations</h3>
+            {maxToolIterations > 0 ? (
+              <Badge className="bg-primary/10 text-primary hover:bg-primary/10 text-[10px]">
+                Override
+              </Badge>
+            ) : (
+              <Badge variant="outline" className="text-[10px]">
+                Default (20)
+              </Badge>
+            )}
+          </div>
+          {maxToolIterations > 0 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 text-xs"
+              onClick={async () => {
+                setMaxToolIterations(0);
+                setSaving(true);
+                try {
+                  await updateAgent(agentId, { maxToolIterations: 0 });
+                  flashSaved();
+                } finally {
+                  setSaving(false);
+                }
+              }}
+              disabled={saving}
+            >
+              Clear override
+            </Button>
+          )}
+        </div>
+        <Input
+          type="number"
+          min={1}
+          max={200}
+          value={maxToolIterations || ""}
+          onChange={(e) => setMaxToolIterations(Number(e.target.value) || 0)}
+          onBlur={handleMaxToolIterationsBlur}
+          placeholder="20"
+          className="font-mono text-sm max-w-[200px]"
+          disabled={saving}
+        />
+        <p className="text-xs text-muted-foreground mt-2">
+          Maximum number of tool calls the agent can make per conversation turn.
+          Default is 20. Increase for complex tasks that require many tool
+          invocations (e.g. deep research, multi-step browsing).
         </p>
       </div>
 

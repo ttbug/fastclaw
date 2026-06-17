@@ -1338,6 +1338,7 @@ export interface AgentUpdatePayload {
   // per-agent overrides and fall back to system-wide enable state.
   plugins?: Record<string, boolean>;
   pluginsReset?: boolean;
+  maxToolIterations?: number;
 }
 
 export async function updateAgent(id: string, agent: AgentUpdatePayload) {
