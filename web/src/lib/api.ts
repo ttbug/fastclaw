@@ -1531,6 +1531,23 @@ export async function deleteAgentSkill(agentId: string, name: string) {
   return res.json();
 }
 
+// Per-user skills: the caller's personal bucket. Visible across every
+// agent the user chats with; isolated from other chatters. Path is
+// /api/me/* (current authenticated user) but the UI surfaces it as
+// "user-skills" to disambiguate from /api/me and from the per-agent
+// /api/agents/{id}/skills URL shape.
+export async function getMySkills(): Promise<SkillInfo[]> {
+  const res = await apiFetch("/api/me/skills");
+  return res.json();
+}
+
+export async function deleteMySkill(name: string) {
+  const res = await apiFetch(`/api/me/skills/${encodeURIComponent(name)}`, {
+    method: "DELETE",
+  });
+  return res.json();
+}
+
 // Search results use skills.sh's shape; clawhub has a different shape but the
 // admin UI only wires skills.sh (primary registry). Callers that want clawhub
 // go through installSkill with source="clawhub".
