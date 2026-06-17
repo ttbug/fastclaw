@@ -1221,6 +1221,30 @@ export function ChatScreen() {
       window.history.replaceState(null, "", target);
     }
 
+    // Optimistic sidebar insertion: the session row + user message
+    // land in the store as soon as HandleMessage runs HandleWebChat's
+    // session.Append, so the sidebar would correctly show this chat
+    // — but only after the SSE `done` event re-triggers
+    // fastclaw:sessions-changed. We dispatch a sibling "pending"
+    // event right now so the sidebar shows the new conversation the
+    // instant the user hits Send, with no perceived gap. The existing
+    // loadSessions at `done` will reconcile title/preview with the
+    // server's canonical row. Abort leaves the session row in place
+    // anyway (the user message is already persisted), so the
+    // optimistic entry is correct in the abort case too.
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent("fastclaw:session-pending", {
+          detail: {
+            agentId: selectedAgent,
+            sessionId,
+            preview: text,
+            projectId: urlProjectId || undefined,
+          },
+        }),
+      );
+    }
+
     // Upload attachments first so the agent can read them by name on its
     // first turn. Files land at sessions/<sid>/<basename> in the workspace
     // store, which is the same dir the docker sandbox bind-mounts as

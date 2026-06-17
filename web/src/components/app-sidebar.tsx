@@ -247,6 +247,44 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
     };
   }, [activeAgentId]);
 
+  // Optimistic insert for a brand-new chat. chat-screen fires this
+  // the moment the user hits Send, BEFORE the server has even seen
+  // the request — but the session row is destined to exist (the
+  // backend's session.Append persists it on first user message), so
+  // the sidebar can safely show the entry. Abort doesn't unmake the
+  // session either, so we don't roll this back on stop. The follow-up
+  // `fastclaw:sessions-changed` fired at SSE `done` will reconcile
+  // title/preview with the server's canonical row.
+  React.useEffect(() => {
+    if (!activeAgentId) return;
+    const onPending = (e: Event) => {
+      const detail = (e as CustomEvent<{
+        agentId: string;
+        sessionId: string;
+        preview: string;
+        projectId?: string;
+      }>).detail;
+      if (!detail || detail.agentId !== activeAgentId) return;
+      setSessions((prev) => {
+        if (prev.some((s) => s.id === detail.sessionId)) return prev;
+        const trimmed = (detail.preview || "").trim().slice(0, 60);
+        return [
+          {
+            id: detail.sessionId,
+            title: trimmed || "New chat",
+            channel: "web",
+            projectId: detail.projectId || undefined,
+          },
+          ...prev,
+        ];
+      });
+    };
+    window.addEventListener("fastclaw:session-pending", onPending);
+    return () => {
+      window.removeEventListener("fastclaw:session-pending", onPending);
+    };
+  }, [activeAgentId]);
+
   // broadcastSessionsChanged fires the same custom event NavSessions
   // listens to, so a project mutation refreshes both the projects list
   // AND the sessions list (a new chat-in-project shows up under its
