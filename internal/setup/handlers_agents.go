@@ -217,6 +217,22 @@ func (s *Server) agentScopeSharedIdentity(r *http.Request, ownerUserID, agentID 
 	return false
 }
 
+// agentScopeMaxToolIterations reads the per-agent maxToolIterations
+// override. Returns 0 when absent (inheriting system default).
+func (s *Server) agentScopeMaxToolIterations(r *http.Request, agentID string) int {
+	rec, err := s.dataStore.GetConfigByName(r.Context(), store.KindSetting, "", agentID, "agents.defaults")
+	if err != nil || rec == nil {
+		return 0
+	}
+	switch v := rec.Data["maxToolIterations"].(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	}
+	return 0
+}
+
 // effectiveUserID returns the resolved user_id for the request: the
 // caller's own id, or — for super_admin in actAs mode — the impersonated
 // user's id.
@@ -477,11 +493,11 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Name              string    `json:"name,omitempty"`
-		Description       *string   `json:"description,omitempty"` // ptr so empty-string clears it
-		Model             *string   `json:"model,omitempty"`       // ptr so empty-string clears the agent-scope override
-		IsPublic          *bool     `json:"isPublic,omitempty"`    // ptr so caller can leave it unchanged
-		ShareModelConfig  *bool     `json:"shareModelConfig,omitempty"`
+		Name             string  `json:"name,omitempty"`
+		Description      *string `json:"description,omitempty"` // ptr so empty-string clears it
+		Model            *string `json:"model,omitempty"`       // ptr so empty-string clears the agent-scope override
+		IsPublic         *bool   `json:"isPublic,omitempty"`    // ptr so caller can leave it unchanged
+		ShareModelConfig *bool   `json:"shareModelConfig,omitempty"`
 		// PromptMode is a ptr so the caller can distinguish "leave
 		// unchanged" (omitted / null) from "clear override" (empty
 		// string). Allowed string values: "agent" | "chatbot" |
@@ -514,8 +530,9 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 		PluginsReset bool            `json:"pluginsReset,omitempty"`
 		// MCPServers is a whole-map replace: omit to leave untouched,
 		// send {} to clear, or send the full desired map to replace.
-		MCPServers      map[string]config.MCPServerConfig `json:"mcpServers,omitempty"`
-		MCPServersReset bool                              `json:"mcpServersReset,omitempty"`
+		MCPServers        map[string]config.MCPServerConfig `json:"mcpServers,omitempty"`
+		MCPServersReset   bool                              `json:"mcpServersReset,omitempty"`
+		MaxToolIterations *int                              `json:"maxToolIterations,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
@@ -617,6 +634,13 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 	} else if req.AutoPersist != nil {
 		defaultsPatch["autoPersist"] = *req.AutoPersist
 	}
+	if req.MaxToolIterations != nil {
+		if *req.MaxToolIterations <= 0 {
+			defaultsPatch["maxToolIterations"] = nil
+		} else {
+			defaultsPatch["maxToolIterations"] = *req.MaxToolIterations
+		}
+	}
 	if err := s.applyAgentScopeDefaultsPatch(r, rec.ID, defaultsPatch); err != nil {
 		jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
@@ -649,18 +673,19 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 	share := agentShareModelConfig(rec)
 	jsonResponse(w, http.StatusOK, map[string]any{
 		"agent": map[string]any{
-			"id":               rec.ID,
-			"userId":           rec.UserID,
-			"name":             rec.Name,
-			"model":            s.agentScopeModel(r, rec.ID),
-			"promptMode":       s.agentScopePromptMode(r, rec.ID),
-			"splitReplies":     s.agentScopeSplitReplies(r, rec.ID),
-			"autoPersist":      s.agentScopeAutoPersist(r, rec.ID),
-			"sharedIdentity":   s.agentScopeSharedIdentity(r, rec.UserID, rec.ID),
-			"plugins":          s.agentScopePlugins(r, rec.ID),
-			"config":           rec.Config,
-			"isPublic":         rec.IsPublic,
-			"shareModelConfig": share,
+			"id":                rec.ID,
+			"userId":            rec.UserID,
+			"name":              rec.Name,
+			"model":             s.agentScopeModel(r, rec.ID),
+			"promptMode":        s.agentScopePromptMode(r, rec.ID),
+			"splitReplies":      s.agentScopeSplitReplies(r, rec.ID),
+			"autoPersist":       s.agentScopeAutoPersist(r, rec.ID),
+			"sharedIdentity":    s.agentScopeSharedIdentity(r, rec.UserID, rec.ID),
+			"plugins":           s.agentScopePlugins(r, rec.ID),
+			"maxToolIterations": s.agentScopeMaxToolIterations(r, rec.ID),
+			"config":            rec.Config,
+			"isPublic":          rec.IsPublic,
+			"shareModelConfig":  share,
 		},
 	})
 }
@@ -688,21 +713,22 @@ func (s *Server) handleGetAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	jsonResponse(w, http.StatusOK, map[string]any{
 		"agent": map[string]any{
-			"id":               rec.ID,
-			"name":             rec.Name,
-			"description":      desc,
-			"userId":           rec.UserID,
-			"role":             role,
-			"model":            s.agentScopeModel(r, rec.ID),
-			"promptMode":       s.agentScopePromptMode(r, rec.ID),
-			"splitReplies":     s.agentScopeSplitReplies(r, rec.ID),
-			"autoPersist":      s.agentScopeAutoPersist(r, rec.ID),
-			"sharedIdentity":   s.agentScopeSharedIdentity(r, rec.UserID, rec.ID),
-			"plugins":          s.agentScopePlugins(r, rec.ID),
-			"avatarUrl":        "/api/agents/" + rec.ID + "/files/avatar.png",
-			"createdAt":        rec.CreatedAt,
-			"isPublic":         rec.IsPublic,
-			"shareModelConfig": share,
+			"id":                rec.ID,
+			"name":              rec.Name,
+			"description":       desc,
+			"userId":            rec.UserID,
+			"role":              role,
+			"model":             s.agentScopeModel(r, rec.ID),
+			"promptMode":        s.agentScopePromptMode(r, rec.ID),
+			"splitReplies":      s.agentScopeSplitReplies(r, rec.ID),
+			"autoPersist":       s.agentScopeAutoPersist(r, rec.ID),
+			"sharedIdentity":    s.agentScopeSharedIdentity(r, rec.UserID, rec.ID),
+			"plugins":           s.agentScopePlugins(r, rec.ID),
+			"maxToolIterations": s.agentScopeMaxToolIterations(r, rec.ID),
+			"avatarUrl":         "/api/agents/" + rec.ID + "/files/avatar.png",
+			"createdAt":         rec.CreatedAt,
+			"isPublic":          rec.IsPublic,
+			"shareModelConfig":  share,
 		},
 	})
 }
@@ -998,15 +1024,15 @@ func (s *Server) handleAgentFileList(w http.ResponseWriter, r *http.Request) {
 // file browser / zip filter. acceptPath returns true for paths the
 // scope considers in-bounds:
 //
-//   loose chat:  paths under sessions/<chat_id>/
-//   project chat: paths under projects/<pid>/<chat_id>/ (the chat's
-//                 own files), PLUS files directly at projects/<pid>/
-//                 (project-root "shared/legacy" files — pre-subdir
-//                 layout still lives there, and operators may
-//                 deliberately drop shared files at the root). Other
-//                 chats' subdirs (projects/<pid>/<other-sid>/...)
-//                 are excluded — those belong to that chat's panel.
-//   no session:  everything (admin browser).
+//	loose chat:  paths under sessions/<chat_id>/
+//	project chat: paths under projects/<pid>/<chat_id>/ (the chat's
+//	              own files), PLUS files directly at projects/<pid>/
+//	              (project-root "shared/legacy" files — pre-subdir
+//	              layout still lives there, and operators may
+//	              deliberately drop shared files at the root). Other
+//	              chats' subdirs (projects/<pid>/<other-sid>/...)
+//	              are excluded — those belong to that chat's panel.
+//	no session:  everything (admin browser).
 //
 // archiveSuffix returns the human-readable scope id used in the zip
 // filename — chat_id for loose chats, "<pid>-<chat_id>" for project
