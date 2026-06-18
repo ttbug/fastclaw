@@ -26,6 +26,7 @@ import {
   LayoutDashboardIcon,
   MessagesSquareIcon,
   PlusIcon,
+  ServerIcon,
   SettingsIcon,
   SparklesIcon,
   UsersIcon,
@@ -51,7 +52,7 @@ import {
 // the sidebar showing the platform nav for /agents/<id>/project/...
 function extractAgentId(pathname: string): string | null {
   const match = pathname.match(
-    /^\/agents\/([^/]+)\/(chat|customize|skills|models|sessions|channels|chats|scheduler|project)/,
+    /^\/agents\/([^/]+)\/(chat|customize|skills|models|sessions|channels|mcp|chats|scheduler|project)/,
   );
   return match ? match[1] : null;
 }
@@ -64,11 +65,12 @@ function extractAgentId(pathname: string): string | null {
 //   User        Users · Chats · Token Usage · API Keys — admin platform tools
 //   (no label)  Settings                              — opens the user dialog
 //
-// Skills / Tools and the Users/Chats/Token-Usage admin entries are
-// admin-only. Non-admin sees the Agent group with just Agents + Models,
-// and a slim User group with API Keys. Settings is a click-only item —
-// its onClick is attached at render time so it can call into component
-// state.
+// The agent-scoped "Skills" entry points at /user-skills/ for non-admin
+// callers (their personal bucket, visible across all their agents) and
+// at /skills/ for admins (global, shared across every user). Tools and
+// the Users/Chats/Token-Usage entries stay admin-only. Settings is a
+// click-only item — its onClick is attached at render time so it can
+// call into component state.
 const OVERVIEW_ITEM: NavItem = {
   title: "Overview",
   url: "/overview/",
@@ -78,6 +80,7 @@ const OVERVIEW_ITEM: NavItem = {
 const USER_AGENT_GROUP: NavItem[] = [
   { title: "Agents", url: "/agents/", icon: BotIcon },
   { title: "Models", url: "/models/", icon: BrainIcon },
+  { title: "Skills", url: "/user-skills/", icon: SparklesIcon },
 ];
 
 const ADMIN_AGENT_GROUP: NavItem[] = [
@@ -94,6 +97,7 @@ const USER_USER_GROUP: NavItem[] = [
 const ADMIN_USER_GROUP: NavItem[] = [
   { title: "Users", url: "/admin/users/", icon: UsersIcon },
   { title: "Chats", url: "/admin/chats/", icon: MessagesSquareIcon },
+  { title: "MCP", url: "/admin/mcp/", icon: ServerIcon },
   { title: "Token Usage", url: "/admin/usage/", icon: CoinsIcon },
   { title: "API Keys", url: "/apikeys/", icon: KeyRoundIcon },
 ];
@@ -242,6 +246,44 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
     window.addEventListener("fastclaw:sessions-changed", onChange);
     return () => {
       window.removeEventListener("fastclaw:sessions-changed", onChange);
+    };
+  }, [activeAgentId]);
+
+  // Optimistic insert for a brand-new chat. chat-screen fires this
+  // the moment the user hits Send, BEFORE the server has even seen
+  // the request — but the session row is destined to exist (the
+  // backend's session.Append persists it on first user message), so
+  // the sidebar can safely show the entry. Abort doesn't unmake the
+  // session either, so we don't roll this back on stop. The follow-up
+  // `fastclaw:sessions-changed` fired at SSE `done` will reconcile
+  // title/preview with the server's canonical row.
+  React.useEffect(() => {
+    if (!activeAgentId) return;
+    const onPending = (e: Event) => {
+      const detail = (e as CustomEvent<{
+        agentId: string;
+        sessionId: string;
+        preview: string;
+        projectId?: string;
+      }>).detail;
+      if (!detail || detail.agentId !== activeAgentId) return;
+      setSessions((prev) => {
+        if (prev.some((s) => s.id === detail.sessionId)) return prev;
+        const trimmed = (detail.preview || "").trim().slice(0, 60);
+        return [
+          {
+            id: detail.sessionId,
+            title: trimmed || "New chat",
+            channel: "web",
+            projectId: detail.projectId || undefined,
+          },
+          ...prev,
+        ];
+      });
+    };
+    window.addEventListener("fastclaw:session-pending", onPending);
+    return () => {
+      window.removeEventListener("fastclaw:session-pending", onPending);
     };
   }, [activeAgentId]);
 

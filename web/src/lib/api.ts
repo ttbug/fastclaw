@@ -1338,6 +1338,7 @@ export interface AgentUpdatePayload {
   // per-agent overrides and fall back to system-wide enable state.
   plugins?: Record<string, boolean>;
   pluginsReset?: boolean;
+  maxToolIterations?: number;
 }
 
 export async function updateAgent(id: string, agent: AgentUpdatePayload) {
@@ -1420,6 +1421,34 @@ export async function deleteAgentSkill(agentId: string, name: string) {
     { method: "DELETE" },
   );
   return res.json();
+}
+
+// Per-user skills: the caller's personal bucket. Visible across every
+// agent the user chats with; isolated from other chatters. Path is
+// /api/me/* (current authenticated user) but the UI surfaces it as
+// "user-skills" to disambiguate from /api/me and from the per-agent
+// /api/agents/{id}/skills URL shape.
+export async function getMySkills(): Promise<SkillInfo[]> {
+  const res = await apiFetch("/api/me/skills");
+  return res.json();
+}
+
+export async function deleteMySkill(name: string) {
+  const res = await apiFetch(`/api/me/skills/${encodeURIComponent(name)}`, {
+    method: "DELETE",
+  });
+  return res.json();
+}
+
+// userSkillAgentID returns the pseudo agent ID the backend uses to
+// route install/upload into the caller's personal bucket. Mirrors
+// internal/skills/objectstore.go:UserSkillOwnerPrefix on the server.
+// Centralised so client code can't accidentally drift on the leading
+// underscore (which the server parses to mean "this is a user target,
+// look up the matching user for auth" — getting it wrong would land
+// the install in the global bucket or fail auth).
+export function userSkillAgentID(userID: string): string {
+  return `_user_${userID}`;
 }
 
 // Search results use skills.sh's shape; clawhub has a different shape but the
@@ -1731,6 +1760,173 @@ export async function toggleAgentCronJob(
       body: JSON.stringify({ enabled }),
     },
   );
+  return res.json();
+}
+
+// CreateAgentCronJobInput is the manual-create counterpart to the
+// agent's create_cron_job tool. channel/chatId pick the delivery target
+// (a form has no originating turn to inherit them from) — the UI sources
+// them from one of the agent's existing chat sessions.
+export interface CreateAgentCronJobInput {
+  name: string;
+  type: string; // "cron" | "interval" | "once"
+  schedule: string;
+  message: string;
+  channel: string;
+  chatId: string;
+  accountId?: string;
+}
+
+export async function createAgentCronJob(
+  agentId: string,
+  input: CreateAgentCronJobInput,
+): Promise<{ ok: boolean; job?: AgentCronJob; error?: string }> {
+  const res = await apiFetch(`/api/agents/${agentId}/cron`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return res.json();
+}
+
+export type MCPServerType = "http" | "stdio";
+
+export interface AgentMCPServer {
+  name: string;
+  type: MCPServerType;
+  enabled: boolean;
+  url?: string;
+  headers?: Record<string, string>;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  updatedAt?: string;
+}
+
+export interface AgentMCPServerInput {
+  name: string;
+  type: MCPServerType;
+  enabled?: boolean;
+  url?: string;
+  headers?: Record<string, string>;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+}
+
+export async function listAgentMCPServers(agentId: string): Promise<AgentMCPServer[]> {
+  const res = await apiFetch(`/api/agents/${encodeURIComponent(agentId)}/mcp`);
+  if (!res.ok) throw new Error(await readError(res, "load MCP servers failed"));
+  const data = await res.json();
+  return data.servers || [];
+}
+
+export async function createAgentMCPServer(
+  agentId: string,
+  input: AgentMCPServerInput,
+): Promise<{ ok: boolean; server?: AgentMCPServer; error?: string }> {
+  const res = await apiFetch(`/api/agents/${encodeURIComponent(agentId)}/mcp`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return res.json();
+}
+
+export async function updateAgentMCPServer(
+  agentId: string,
+  name: string,
+  input: AgentMCPServerInput,
+): Promise<{ ok: boolean; server?: AgentMCPServer; error?: string }> {
+  const res = await apiFetch(
+    `/api/agents/${encodeURIComponent(agentId)}/mcp/${encodeURIComponent(name)}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    },
+  );
+  return res.json();
+}
+
+export async function deleteAgentMCPServer(
+  agentId: string,
+  name: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const res = await apiFetch(
+    `/api/agents/${encodeURIComponent(agentId)}/mcp/${encodeURIComponent(name)}`,
+    { method: "DELETE" },
+  );
+  return res.json();
+}
+
+export interface MCPTestResult {
+  ok: boolean;
+  toolCount?: number;
+  error?: string;
+}
+
+export async function testAgentMCPServer(
+  agentId: string,
+  input: AgentMCPServerInput,
+): Promise<MCPTestResult> {
+  const res = await apiFetch(`/api/agents/${encodeURIComponent(agentId)}/mcp/test`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return res.json();
+}
+
+// Scope-neutral aliases shared by the per-agent and system MCP managers.
+export type MCPServer = AgentMCPServer;
+export type MCPServerInput = AgentMCPServerInput;
+
+export async function listSystemMCPServers(): Promise<MCPServer[]> {
+  const res = await apiFetch(`/api/admin/mcp`);
+  if (!res.ok) throw new Error(await readError(res, "load system MCP servers failed"));
+  const data = await res.json();
+  return data.servers || [];
+}
+
+export async function createSystemMCPServer(
+  input: MCPServerInput,
+): Promise<{ ok: boolean; server?: MCPServer; error?: string }> {
+  const res = await apiFetch(`/api/admin/mcp`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return res.json();
+}
+
+export async function updateSystemMCPServer(
+  name: string,
+  input: MCPServerInput,
+): Promise<{ ok: boolean; server?: MCPServer; error?: string }> {
+  const res = await apiFetch(`/api/admin/mcp/${encodeURIComponent(name)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return res.json();
+}
+
+export async function deleteSystemMCPServer(
+  name: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const res = await apiFetch(`/api/admin/mcp/${encodeURIComponent(name)}`, {
+    method: "DELETE",
+  });
+  return res.json();
+}
+
+export async function testSystemMCPServer(input: MCPServerInput): Promise<MCPTestResult> {
+  const res = await apiFetch(`/api/admin/mcp/test`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
   return res.json();
 }
 

@@ -289,6 +289,21 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("PATCH /api/agents/{id}/projects/{pid}", auth(s.handleUpdateProject))
 	mux.HandleFunc("DELETE /api/agents/{id}/projects/{pid}", auth(s.handleDeleteProject))
 
+	// Per-agent MCP servers
+	mux.HandleFunc("GET /api/agents/{id}/mcp", auth(s.handleListAgentMCPServers))
+	mux.HandleFunc("POST /api/agents/{id}/mcp", auth(s.handleCreateAgentMCPServer))
+	mux.HandleFunc("POST /api/agents/{id}/mcp/test", auth(s.handleTestAgentMCPServer))
+	mux.HandleFunc("PUT /api/agents/{id}/mcp/{name}", auth(s.handleUpdateAgentMCPServer))
+	mux.HandleFunc("DELETE /api/agents/{id}/mcp/{name}", auth(s.handleDeleteAgentMCPServer))
+
+	// System (global) MCP servers — inherited by every agent. Reads are
+	// open to any signed-in user (authorizeScope gates inside); writes are
+	// super_admin-only, enforced in the handler via authorizeScope.
+	mux.HandleFunc("GET /api/admin/mcp", auth(s.handleListSystemMCPServers))
+	mux.HandleFunc("POST /api/admin/mcp", auth(s.handleCreateSystemMCPServer))
+	mux.HandleFunc("POST /api/admin/mcp/test", auth(s.handleTestSystemMCPServer))
+	mux.HandleFunc("PUT /api/admin/mcp/{name}", auth(s.handleUpdateSystemMCPServer))
+	mux.HandleFunc("DELETE /api/admin/mcp/{name}", auth(s.handleDeleteSystemMCPServer))
 	// Project runtime: the coding-agent "live app" layer on top of a
 	// project — a long-lived dev-server sandbox + preview URL. The
 	// upstream SaaS shell drives a project entirely through these.
@@ -343,6 +358,12 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("DELETE /api/skills/{name}", admin(s.handleDeleteSkill))
 	mux.HandleFunc("GET /api/agents/{id}/skills", auth(s.handleListAgentSkills))
 	mux.HandleFunc("DELETE /api/agents/{id}/skills/{name}", auth(s.handleDeleteAgentSkill))
+	// Per-user skills: each chatter's personal bucket at
+	// ~/.fastclaw/users/<uid>/skills/. Visible across every agent the
+	// user chats with, isolated from other chatters. Complements the
+	// global (admin-only) and per-agent (owner-only) skills surfaces.
+	mux.HandleFunc("GET /api/me/skills", auth(s.handleListMySkills))
+	mux.HandleFunc("DELETE /api/me/skills/{name}", auth(s.handleDeleteMySkill))
 
 	// Plugins (super_admin only).
 	mux.HandleFunc("GET /api/plugins", admin(s.handleListPlugins))
@@ -379,6 +400,7 @@ func (s *Server) Run(ctx context.Context) error {
 	// Per-agent cron jobs (DB-backed, includes anything the agent
 	// scheduled itself via create_cron_job at runtime).
 	mux.HandleFunc("GET /api/agents/{id}/cron", auth(s.handleListAgentCronJobs))
+	mux.HandleFunc("POST /api/agents/{id}/cron", auth(s.handleCreateAgentCronJob))
 	mux.HandleFunc("DELETE /api/agents/{id}/cron/{jobId}", auth(s.handleDeleteAgentCronJob))
 	mux.HandleFunc("PUT /api/agents/{id}/cron/{jobId}", auth(s.handleToggleAgentCronJob))
 

@@ -4,8 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/fastclaw-ai/fastclaw/internal/config"
+	"github.com/fastclaw-ai/fastclaw/internal/cron"
+	"github.com/fastclaw-ai/fastclaw/internal/scope"
 	"github.com/fastclaw-ai/fastclaw/internal/store"
 )
 
@@ -18,6 +23,76 @@ import (
 // the cron.Scheduler (which actually fires them) only watches the DB.
 // So those agent-authored jobs were invisible to the dashboard.
 // handleListAgentCronJobs surfaces them at /api/agents/{id}/cron.
+
+// handleCreateAgentCronJob lets an owner schedule a task from the
+// dashboard Scheduler page — the manual counterpart to the agent's own
+// create_cron_job tool. It writes the same cron_jobs DB row the tool
+// does (UserID left empty; the scheduler resolves the owner from the
+// agent), shares cron.ComputeFirstRun for NextRun + validation, and
+// wakes the scheduler. The destination channel/chatId come from the
+// request (the UI picks one of the agent's existing chat sessions) since
+// a form has no originating turn to inherit them from.
+func (s *Server) handleCreateAgentCronJob(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if s.requireAgentOwner(w, r, id) == nil {
+		return
+	}
+	var req struct {
+		Name      string `json:"name"`
+		Type      string `json:"type"`
+		Schedule  string `json:"schedule"`
+		Message   string `json:"message"`
+		Channel   string `json:"channel"`
+		ChatID    string `json:"chatId"`
+		AccountID string `json:"accountId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "invalid request"})
+		return
+	}
+	if req.Name == "" || req.Schedule == "" || req.Message == "" {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "name, schedule, and message are required"})
+		return
+	}
+	jobType := req.Type
+	if jobType == "" {
+		jobType = "cron"
+	}
+
+	// Resolve NextRun in the owner's timezone, same as the LLM tool —
+	// a zone-less "once" datetime and cron wall-clock fields both mean
+	// the chatter's local time.
+	tzName := scope.Timezone(r.Context(), s.dataStore, s.effectiveUserID(r), id)
+	loc := scope.LoadLocationOrLocal(tzName)
+	now := time.Now()
+	nextRun, err := cron.ComputeFirstRun(jobType, req.Schedule, now, loc)
+	if err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+
+	job := &store.CronJobRecord{
+		ID:        uuid.NewString(),
+		AgentID:   id,
+		Name:      req.Name,
+		Type:      jobType,
+		Schedule:  req.Schedule,
+		Message:   req.Message,
+		Channel:   req.Channel,
+		ChatID:    req.ChatID,
+		AccountID: req.AccountID,
+		Timezone:  tzName,
+		Enabled:   true,
+		NextRun:   &nextRun,
+		CreatedAt: now,
+	}
+	if err := s.dataStore.SaveCronJob(r.Context(), job); err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	cron.NotifyJobCreated()
+	jsonResponse(w, http.StatusOK, map[string]any{"ok": true, "job": job})
+}
 
 func (s *Server) handleListAgentCronJobs(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")

@@ -540,3 +540,76 @@ func NextOccurrenceIn(schedule string, after time.Time, loc *time.Location) time
 	}
 	return after.Add(time.Hour)
 }
+
+// ValidateCronExpr reports whether schedule is a well-formed 5-field cron
+// expression in the dialect this scheduler understands: each field is
+// '*', '*/N' (N > 0), or a plain non-negative integer. It does NOT accept
+// ranges or comma lists (fieldMatch doesn't either). Used to reject
+// malformed input up front — NextOccurrenceIn otherwise silently falls
+// back to "now + 1h" for garbage, which is fine for an LLM-produced
+// expression but a foot-gun for a hand-typed one.
+func ValidateCronExpr(schedule string) error {
+	fields := strings.Fields(schedule)
+	if len(fields) != 5 {
+		return fmt.Errorf("cron expression must have 5 fields (got %d): %q", len(fields), schedule)
+	}
+	for _, f := range fields {
+		if f == "*" {
+			continue
+		}
+		if rest, ok := strings.CutPrefix(f, "*/"); ok {
+			n, err := strconv.Atoi(rest)
+			if err != nil || n <= 0 {
+				return fmt.Errorf("invalid cron step field %q", f)
+			}
+			continue
+		}
+		if _, err := strconv.Atoi(f); err != nil {
+			return fmt.Errorf("invalid cron field %q", f)
+		}
+	}
+	return nil
+}
+
+// ComputeFirstRun calculates the first fire time for a freshly created
+// job, given its type ("once"/"interval"/"cron", empty = "cron"), the
+// schedule string, the current time, and the chatter's timezone. It is
+// the single source of truth for both the create_cron_job tool and the
+// dashboard's manual-create handler, so the two paths can't drift.
+//
+//   - once:     RFC3339, or zone-less "2006-01-02T15:04:05" read in loc;
+//               must be in the future.
+//   - interval: a duration ("30m", "2h"); an optional "every " prefix is
+//               tolerated. Fires now+duration.
+//   - cron:     a validated 5-field expression; first match in loc.
+func ComputeFirstRun(jobType, schedule string, now time.Time, loc *time.Location) (time.Time, error) {
+	if loc == nil {
+		loc = time.Local
+	}
+	switch jobType {
+	case "once":
+		t, err := time.Parse(time.RFC3339, schedule)
+		if err != nil {
+			t, err = time.ParseInLocation("2006-01-02T15:04:05", schedule, loc)
+			if err != nil {
+				return time.Time{}, fmt.Errorf("once schedule must be an ISO datetime (e.g. 2026-05-06T15:30:00), got: %q", schedule)
+			}
+		}
+		if t.Before(now) {
+			return time.Time{}, fmt.Errorf("schedule is in the past: %s", schedule)
+		}
+		return t, nil
+	case "interval":
+		sched := strings.TrimPrefix(schedule, "every ")
+		dur, err := time.ParseDuration(sched)
+		if err != nil {
+			return time.Time{}, fmt.Errorf("invalid interval (e.g. '30m', '1h', 'every 2h'): %q", schedule)
+		}
+		return now.Add(dur), nil
+	default:
+		if err := ValidateCronExpr(schedule); err != nil {
+			return time.Time{}, err
+		}
+		return NextOccurrenceIn(schedule, now, loc), nil
+	}
+}

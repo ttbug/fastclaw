@@ -40,7 +40,12 @@ const (
 	// userSkillOwnerPrefix is the leading marker for per-user pseudo
 	// owner keys (`_user_<uid>`). Same leading-underscore convention as
 	// GlobalSkillOwner so it can never collide with a real agent ID.
-	userSkillOwnerPrefix = "_user_"
+	//
+	// Exposed as UserSkillOwnerPrefix so other packages can detect the
+	// pseudo-id form without round-tripping through UserSkillOwner("")
+	// (which returns "" for empty input — not useful as a "is this a
+	// user pseudo-id" predicate).
+	UserSkillOwnerPrefix = "_user_"
 )
 
 // UserSkillOwner returns the workspace.Store pseudo-owner key for a
@@ -50,7 +55,7 @@ func UserSkillOwner(userID string) string {
 	if userID == "" {
 		return ""
 	}
-	return userSkillOwnerPrefix + userID
+	return UserSkillOwnerPrefix + userID
 }
 
 func buildKey(skillName, relPath string) string {

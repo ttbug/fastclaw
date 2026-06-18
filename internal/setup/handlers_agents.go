@@ -200,6 +200,22 @@ func (s *Server) agentScopeAutoPersist(r *http.Request, agentID string) *bool {
 	return &v
 }
 
+// agentScopeMaxToolIterations reads the per-agent maxToolIterations
+// override. Returns 0 when absent (inheriting system default).
+func (s *Server) agentScopeMaxToolIterations(r *http.Request, agentID string) int {
+	rec, err := s.dataStore.GetConfigByName(r.Context(), store.KindSetting, "", agentID, "agents.defaults")
+	if err != nil || rec == nil {
+		return 0
+	}
+	switch v := rec.Data["maxToolIterations"].(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	}
+	return 0
+}
+
 // effectiveUserID returns the resolved user_id for the request: the
 // caller's own id, or — for super_admin in actAs mode — the impersonated
 // user's id.
@@ -488,8 +504,9 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 		// are bool. Patch semantics: only the keys present in this map
 		// get written; other keys in the existing row are preserved.
 		// To clear all overrides for this agent, send pluginsReset:true.
-		Plugins      map[string]bool `json:"plugins,omitempty"`
-		PluginsReset bool            `json:"pluginsReset,omitempty"`
+		Plugins           map[string]bool `json:"plugins,omitempty"`
+		PluginsReset      bool            `json:"pluginsReset,omitempty"`
+		MaxToolIterations *int            `json:"maxToolIterations,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
@@ -576,6 +593,13 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 	} else if req.AutoPersist != nil {
 		defaultsPatch["autoPersist"] = *req.AutoPersist
 	}
+	if req.MaxToolIterations != nil {
+		if *req.MaxToolIterations <= 0 {
+			defaultsPatch["maxToolIterations"] = nil
+		} else {
+			defaultsPatch["maxToolIterations"] = *req.MaxToolIterations
+		}
+	}
 	if err := s.applyAgentScopeDefaultsPatch(r, rec.ID, defaultsPatch); err != nil {
 		jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
@@ -598,17 +622,18 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 	share := agentShareModelConfig(rec)
 	jsonResponse(w, http.StatusOK, map[string]any{
 		"agent": map[string]any{
-			"id":               rec.ID,
-			"userId":           rec.UserID,
-			"name":             rec.Name,
-			"model":            s.agentScopeModel(r, rec.ID),
-			"promptMode":       s.agentScopePromptMode(r, rec.ID),
-			"splitReplies":     s.agentScopeSplitReplies(r, rec.ID),
-			"autoPersist":      s.agentScopeAutoPersist(r, rec.ID),
-			"plugins":          s.agentScopePlugins(r, rec.ID),
-			"config":           rec.Config,
-			"isPublic":         rec.IsPublic,
-			"shareModelConfig": share,
+			"id":                rec.ID,
+			"userId":            rec.UserID,
+			"name":              rec.Name,
+			"model":             s.agentScopeModel(r, rec.ID),
+			"promptMode":        s.agentScopePromptMode(r, rec.ID),
+			"splitReplies":      s.agentScopeSplitReplies(r, rec.ID),
+			"autoPersist":       s.agentScopeAutoPersist(r, rec.ID),
+			"plugins":           s.agentScopePlugins(r, rec.ID),
+			"maxToolIterations": s.agentScopeMaxToolIterations(r, rec.ID),
+			"config":            rec.Config,
+			"isPublic":          rec.IsPublic,
+			"shareModelConfig":  share,
 		},
 	})
 }
@@ -636,20 +661,21 @@ func (s *Server) handleGetAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	jsonResponse(w, http.StatusOK, map[string]any{
 		"agent": map[string]any{
-			"id":               rec.ID,
-			"name":             rec.Name,
-			"description":      desc,
-			"userId":           rec.UserID,
-			"role":             role,
-			"model":            s.agentScopeModel(r, rec.ID),
-			"promptMode":       s.agentScopePromptMode(r, rec.ID),
-			"splitReplies":     s.agentScopeSplitReplies(r, rec.ID),
-			"autoPersist":      s.agentScopeAutoPersist(r, rec.ID),
-			"plugins":          s.agentScopePlugins(r, rec.ID),
-			"avatarUrl":        "/api/agents/" + rec.ID + "/files/avatar.png",
-			"createdAt":        rec.CreatedAt,
-			"isPublic":         rec.IsPublic,
-			"shareModelConfig": share,
+			"id":                rec.ID,
+			"name":              rec.Name,
+			"description":       desc,
+			"userId":            rec.UserID,
+			"role":              role,
+			"model":             s.agentScopeModel(r, rec.ID),
+			"promptMode":        s.agentScopePromptMode(r, rec.ID),
+			"splitReplies":      s.agentScopeSplitReplies(r, rec.ID),
+			"autoPersist":       s.agentScopeAutoPersist(r, rec.ID),
+			"plugins":           s.agentScopePlugins(r, rec.ID),
+			"maxToolIterations": s.agentScopeMaxToolIterations(r, rec.ID),
+			"avatarUrl":         "/api/agents/" + rec.ID + "/files/avatar.png",
+			"createdAt":         rec.CreatedAt,
+			"isPublic":          rec.IsPublic,
+			"shareModelConfig":  share,
 		},
 	})
 }
