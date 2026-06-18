@@ -1548,6 +1548,17 @@ export async function deleteMySkill(name: string) {
   return res.json();
 }
 
+// userSkillAgentID returns the pseudo agent ID the backend uses to
+// route install/upload into the caller's personal bucket. Mirrors
+// internal/skills/objectstore.go:UserSkillOwnerPrefix on the server.
+// Centralised so client code can't accidentally drift on the leading
+// underscore (which the server parses to mean "this is a user target,
+// look up the matching user for auth" — getting it wrong would land
+// the install in the global bucket or fail auth).
+export function userSkillAgentID(userID: string): string {
+  return `_user_${userID}`;
+}
+
 // Search results use skills.sh's shape; clawhub has a different shape but the
 // admin UI only wires skills.sh (primary registry). Callers that want clawhub
 // go through installSkill with source="clawhub".

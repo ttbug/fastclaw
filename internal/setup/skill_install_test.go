@@ -4,10 +4,12 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/fastclaw-ai/fastclaw/internal/auth"
+	"github.com/fastclaw-ai/fastclaw/internal/skills"
 	"github.com/fastclaw-ai/fastclaw/internal/store"
 	"github.com/fastclaw-ai/fastclaw/internal/users"
 )
@@ -74,6 +76,128 @@ func TestAuthorizeSkillInstallTargetRequiresAdminForGlobalInstalls(t *testing.T)
 				t.Fatalf("status = %d, want %d", rr.Code, tt.wantStatus)
 			}
 		})
+	}
+}
+
+func TestAuthorizeSkillInstallTargetKeepsUserInstallsSelfScoped(t *testing.T) {
+	tests := []struct {
+		name       string
+		ident      auth.Identity
+		agent      string
+		wantOK     bool
+		wantStatus int
+	}{
+		{
+			name: "owner of their own bucket allowed",
+			ident: auth.Identity{
+				UserID:     "u_alice",
+				Role:       users.RoleUser,
+				AuthMethod: "session",
+			},
+			agent:  skills.UserSkillOwnerPrefix + "u_alice",
+			wantOK: true,
+		},
+		{
+			name: "different regular user rejected",
+			ident: auth.Identity{
+				UserID:     "u_bob",
+				Role:       users.RoleUser,
+				AuthMethod: "session",
+			},
+			agent:      skills.UserSkillOwnerPrefix + "u_alice",
+			wantOK:     false,
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name: "admin can write to any user's bucket",
+			ident: auth.Identity{
+				UserID:     "u_admin",
+				Role:       users.RoleSuperAdmin,
+				AuthMethod: "session",
+			},
+			agent:  skills.UserSkillOwnerPrefix + "u_alice",
+			wantOK: true,
+		},
+		{
+			name: "admin api key can write to any user's bucket",
+			ident: auth.Identity{
+				UserID:     "u_anon",
+				Role:       users.RoleUser,
+				AuthMethod: "apikey",
+				APIKeyType: users.APIKeyTypeAdmin,
+			},
+			agent:  skills.UserSkillOwnerPrefix + "u_alice",
+			wantOK: true,
+		},
+		{
+			name: "actAs read-only admin rejected",
+			ident: auth.Identity{
+				UserID:      "u_admin",
+				Role:        users.RoleSuperAdmin,
+				AuthMethod:  "session",
+				ActAsUserID: "u_alice",
+			},
+			agent:      skills.UserSkillOwnerPrefix + "u_alice",
+			wantOK:     false,
+			wantStatus: http.StatusForbidden,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := NewServer(0)
+			rr := httptest.NewRecorder()
+			ok := s.authorizeSkillInstallTarget(rr, skillInstallRequest(tt.ident), tt.agent)
+			if ok != tt.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
+			}
+			if !tt.wantOK && rr.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", rr.Code, tt.wantStatus)
+			}
+		})
+	}
+}
+
+func TestParseUserAgentID(t *testing.T) {
+	tests := []struct {
+		in      string
+		wantUID string
+		wantOK  bool
+	}{
+		{"_user_u_alice", "u_alice", true},
+		{"_user_", "", false},
+		{"", "", false},
+		{"agent_x", "", false},
+		{"_USER_u_alice", "", false}, // case sensitive — guards against confusion with real IDs
+		{"_user_u_with_underscores", "u_with_underscores", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			uid, ok := parseUserAgentID(tt.in)
+			if uid != tt.wantUID || ok != tt.wantOK {
+				t.Fatalf("parseUserAgentID(%q) = (%q, %v), want (%q, %v)", tt.in, uid, ok, tt.wantUID, tt.wantOK)
+			}
+		})
+	}
+}
+
+func TestResolveInstallTargetForUserBucket(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("FASTCLAW_HOME", home)
+
+	uid := "u_charlie"
+	agent := skills.UserSkillOwnerPrefix + uid
+	dir, err := resolveInstallTarget(httptest.NewRequest(http.MethodPost, "/", nil), agent)
+	if err != nil {
+		t.Fatalf("resolveInstallTarget: %v", err)
+	}
+	want := filepath.Join(home, "users", uid, "skills")
+	if dir != want {
+		t.Fatalf("dir = %q, want %q", dir, want)
+	}
+	// Directory should have been created so the install can land directly.
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("stat: %v", err)
 	}
 }
 

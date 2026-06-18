@@ -84,8 +84,13 @@ func (s *Server) handleInstallSkill(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.Agent != "" {
-		if ag := s.resolveAgent(r, req.Agent); ag != nil {
-			ag.ReloadWorkspaceFiles()
+		// `_user_<uid>` targets have no live Agent handle — they ride
+		// the per-user loader layer and don't need a hot-reload. Skip
+		// the resolveAgent call rather than letting it error.
+		if _, isUser := parseUserAgentID(req.Agent); !isUser {
+			if ag := s.resolveAgent(r, req.Agent); ag != nil {
+				ag.ReloadWorkspaceFiles()
+			}
 		}
 	}
 
@@ -108,16 +113,26 @@ func (s *Server) authorizeSkillInstallTarget(w http.ResponseWriter, r *http.Requ
 	if !s.requireWritable(w, r) {
 		return false
 	}
+	ident, ok := auth.FromContext(r.Context())
+	if !ok {
+		jsonResponse(w, http.StatusUnauthorized, map[string]any{"ok": false, "error": "unauthorized"})
+		return false
+	}
+	// Per-user install targets use a `_user_<uid>` pseudo agent ID so the
+	// OSS-mirror owner key can piggy-back on the same `agent` field. Only
+	// the matching chatter (or an admin) can write to that bucket.
+	if uid, isUser := parseUserAgentID(agentID); isUser {
+		if !ident.CanAdminPlatform() && ident.EffectiveUserID() != uid {
+			jsonResponse(w, http.StatusForbidden, map[string]any{"ok": false, "error": "can only install to your own personal bucket"})
+			return false
+		}
+		return true
+	}
 	if agentID != "" {
 		// Owner-only — Identity.CanAccessAgent is a deferred-true for
 		// session callers, so without an explicit owner check anyone
 		// could push a skill into anyone else's agent home dir.
 		return s.requireAgentOwner(w, r, agentID) != nil
-	}
-	ident, ok := auth.FromContext(r.Context())
-	if !ok {
-		jsonResponse(w, http.StatusUnauthorized, map[string]any{"ok": false, "error": "unauthorized"})
-		return false
 	}
 	if !ident.CanAdminPlatform() {
 		jsonResponse(w, http.StatusForbidden, map[string]any{"ok": false, "error": "platform admin required"})
@@ -126,10 +141,37 @@ func (s *Server) authorizeSkillInstallTarget(w http.ResponseWriter, r *http.Requ
 	return true
 }
 
+// parseUserAgentID extracts the userID from a `_user_<uid>` pseudo
+// agent ID. Returns (uid, true) on match, ("", false) otherwise.
+// Leading-underscore convention matches UserSkillOwner / GlobalSkillOwner
+// so the value can never collide with a real agent.id.
+func parseUserAgentID(agentID string) (string, bool) {
+	if !strings.HasPrefix(agentID, skills.UserSkillOwnerPrefix) {
+		return "", false
+	}
+	uid := strings.TrimPrefix(agentID, skills.UserSkillOwnerPrefix)
+	if uid == "" {
+		return "", false
+	}
+	return uid, true
+}
+
 // resolveInstallTarget picks the target directory for an install. Authorization
-// happens before this helper is called: agent installs are owner-only; global
-// installs are platform-admin-only.
+// happens before this helper is called: agent installs are owner-only; user
+// installs require the caller to be that user (or admin); global installs are
+// platform-admin-only.
 func resolveInstallTarget(r *http.Request, agentID string) (string, error) {
+	if uid, isUser := parseUserAgentID(agentID); isUser {
+		home, err := config.HomeDir()
+		if err != nil {
+			return "", err
+		}
+		dir := filepath.Join(home, "users", uid, "skills")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return "", fmt.Errorf("create user skills dir: %w", err)
+		}
+		return dir, nil
+	}
 	if agentID != "" {
 		// agents.id is globally unique, so the home dir doesn't need a
 		// user namespace — owner check happens upstream of this call.
@@ -389,8 +431,13 @@ func (s *Server) handleUploadSkill(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if agentID != "" {
-		if ag := s.resolveAgent(r, agentID); ag != nil {
-			ag.ReloadWorkspaceFiles()
+		// Skip agent reload for `_user_<uid>` targets — no live Agent
+		// handle exists for the per-user bucket; the loader picks up
+		// the new skill on the next request via HydrateSkillsDown.
+		if _, isUser := parseUserAgentID(agentID); !isUser {
+			if ag := s.resolveAgent(r, agentID); ag != nil {
+				ag.ReloadWorkspaceFiles()
+			}
 		}
 	}
 
