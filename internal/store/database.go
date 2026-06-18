@@ -3232,12 +3232,6 @@ func (d *DBStore) migrateChannelsFromConfigs(ctx context.Context) error {
 	if err != nil || !exists {
 		return err
 	}
-	// Always clean up stale channel rows from configs, even if
-	// channels table already has data (previous migration may have
-	// copied but not deleted).
-	if _, err := d.db.ExecContext(ctx, `DELETE FROM configs WHERE kind = 'channel'`); err != nil {
-		slog.Warn("failed to clean channel rows from configs", "error", err)
-	}
 	// Skip the copy if channels table already has data.
 	var count int
 	if err := d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM channels`).Scan(&count); err != nil {
@@ -3330,6 +3324,10 @@ func (d *DBStore) migrateChannelsFromConfigs(ctx context.Context) error {
 	}
 	if len(configs) > 0 {
 		slog.Info("migrated channel configs to channels table", "count", len(configs))
+		// Clean up: delete channel rows from configs after successful copy.
+		if _, err := d.db.ExecContext(ctx, `DELETE FROM configs WHERE kind = 'channel'`); err != nil {
+			slog.Warn("failed to clean channel rows from configs", "error", err)
+		}
 	}
 	return nil
 }
