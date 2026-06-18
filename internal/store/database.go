@@ -157,6 +157,9 @@ func (d *DBStore) Migrate(ctx context.Context) error {
 	if err := d.migrateUsersAddOwnerUserID(ctx); err != nil {
 		return fmt.Errorf("migrate users.owner_user_id: %w", err)
 	}
+	if err := d.migrateConfigsMergeScopeID(ctx); err != nil {
+		return fmt.Errorf("migrate configs scope_id: %w", err)
+	}
 	if err := d.migrateChannelsFromConfigs(ctx); err != nil {
 		return fmt.Errorf("migrate channels from configs: %w", err)
 	}
@@ -506,6 +509,37 @@ func (d *DBStore) migrateConfigsAddScopeColumn(ctx context.Context) error {
 		ELSE 'system'
 	END WHERE scope = ''`); err != nil {
 		return fmt.Errorf("backfill scope: %w", err)
+	}
+	return nil
+}
+
+// migrateConfigsMergeScopeID adds a scope_id column that collapses
+// (user_id, agent_id) into a single lookup key: whichever is non-empty
+// wins (they're mutually exclusive for provider/setting rows — the only
+// kinds that remain in configs now that channels have their own table).
+// System rows get scope_id=''.
+//
+// Idempotent: skips the ALTER if the column already exists and only
+// backfills rows where scope_id is still empty.
+func (d *DBStore) migrateConfigsMergeScopeID(ctx context.Context) error {
+	has, err := d.tableHasColumn(ctx, "configs", "scope_id")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := d.db.ExecContext(ctx,
+			`ALTER TABLE configs ADD COLUMN scope_id TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("add scope_id column: %w", err)
+		}
+	}
+	// Backfill: scope_id = user_id when user_id != '', else agent_id.
+	// Only touch rows where scope_id is still empty to stay idempotent.
+	if _, err := d.db.ExecContext(ctx, `UPDATE configs SET scope_id = CASE
+		WHEN user_id != '' THEN user_id
+		WHEN agent_id != '' THEN agent_id
+		ELSE ''
+	END WHERE scope_id = ''`); err != nil {
+		return fmt.Errorf("backfill scope_id: %w", err)
 	}
 	return nil
 }
@@ -1536,6 +1570,9 @@ func (d *DBStore) migrationSQL() []string {
 			-- on every upsert; nothing else writes it. Kept for DB-dump
 			-- readability and ad-hoc admin queries.
 			scope TEXT NOT NULL DEFAULT '',
+			-- scope_id merges user_id/agent_id into a single lookup key:
+			-- whichever is non-empty wins. System rows have scope_id=''.
+			scope_id TEXT NOT NULL DEFAULT '',
 			user_id TEXT NOT NULL DEFAULT '',
 			agent_id TEXT NOT NULL DEFAULT '',
 			name TEXT NOT NULL,
@@ -2842,14 +2879,21 @@ func (d *DBStore) ListAgentFiles(ctx context.Context, agentID, userID string) ([
 // first. Existing callers that pass a real scopeID continue to get
 // exact-match semantics. System rows have scope_id="" anyway so
 // system-scope queries are unaffected by this widening.
-const configSelectCols = `id, kind, scope, user_id, agent_id, name, enabled, credential_key, data, created_at, updated_at`
+const configSelectCols = `id, kind, scope, scope_id, user_id, agent_id, name, enabled, credential_key, data, created_at, updated_at`
 
 func (d *DBStore) ListConfigs(ctx context.Context, kind, userID, agentID string) ([]ConfigRecord, error) {
+	// Derive scope_id from the caller's (userID, agentID) pair — single
+	// column lookup is faster. The two pairs are mutually exclusive for
+	// provider/setting rows (the only kinds that remain in configs).
+	scopeID := userID
+	if scopeID == "" {
+		scopeID = agentID
+	}
 	rows, err := d.db.QueryContext(ctx,
 		fmt.Sprintf(`SELECT `+configSelectCols+`
-			FROM configs WHERE kind = %s AND user_id = %s AND agent_id = %s ORDER BY name`,
-			d.ph(1), d.ph(2), d.ph(3)),
-		kind, userID, agentID)
+			FROM configs WHERE kind = %s AND scope_id = %s AND user_id = %s AND agent_id = %s ORDER BY name`,
+			d.ph(1), d.ph(2), d.ph(3), d.ph(4)),
+		kind, scopeID, userID, agentID)
 	if err != nil {
 		return nil, err
 	}
@@ -2890,11 +2934,15 @@ func (d *DBStore) GetConfig(ctx context.Context, id string) (*ConfigRecord, erro
 }
 
 func (d *DBStore) GetConfigByName(ctx context.Context, kind, userID, agentID, name string) (*ConfigRecord, error) {
+	scopeID := userID
+	if scopeID == "" {
+		scopeID = agentID
+	}
 	row := d.db.QueryRowContext(ctx,
 		fmt.Sprintf(`SELECT `+configSelectCols+`
-			FROM configs WHERE kind = %s AND user_id = %s AND agent_id = %s AND name = %s`,
-			d.ph(1), d.ph(2), d.ph(3), d.ph(4)),
-		kind, userID, agentID, name)
+			FROM configs WHERE kind = %s AND scope_id = %s AND user_id = %s AND agent_id = %s AND name = %s`,
+			d.ph(1), d.ph(2), d.ph(3), d.ph(4), d.ph(5)),
+		kind, scopeID, userID, agentID, name)
 	return scanConfigRow(row)
 }
 
@@ -2907,6 +2955,11 @@ func (d *DBStore) SaveConfig(ctx context.Context, c *ConfigRecord) error {
 	// stale value can't corrupt the column. The DB-dump readability
 	// promise depends on this invariant.
 	c.Scope = computeConfigScope(c.UserID, c.AgentID)
+	// scope_id merges (user_id, agent_id) into a single lookup key.
+	c.ScopeID = c.UserID
+	if c.ScopeID == "" {
+		c.ScopeID = c.AgentID
+	}
 	now := time.Now().UTC()
 	if c.CreatedAt.IsZero() {
 		c.CreatedAt = now
@@ -2924,20 +2977,20 @@ func (d *DBStore) SaveConfig(ctx context.Context, c *ConfigRecord) error {
 	dataBytes, _ := json.Marshal(c.Data)
 	if d.dialect == "postgres" {
 		_, err := d.db.ExecContext(ctx,
-			`INSERT INTO configs (id, kind, scope, user_id, agent_id, name, enabled, credential_key, data, created_at, updated_at)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+			`INSERT INTO configs (id, kind, scope, scope_id, user_id, agent_id, name, enabled, credential_key, data, created_at, updated_at)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 				ON CONFLICT (kind, user_id, agent_id, name) DO UPDATE SET
-				  scope=$3, enabled=$7, credential_key=$8, data=$9, updated_at=$11`,
-			c.ID, c.Kind, c.Scope, c.UserID, c.AgentID, c.Name, c.Enabled, c.CredentialKey, string(dataBytes), c.CreatedAt, c.UpdatedAt)
+				  scope=$3, scope_id=$4, enabled=$8, credential_key=$9, data=$10, updated_at=$12`,
+			c.ID, c.Kind, c.Scope, c.ScopeID, c.UserID, c.AgentID, c.Name, c.Enabled, c.CredentialKey, string(dataBytes), c.CreatedAt, c.UpdatedAt)
 		return err
 	}
 	_, err := d.db.ExecContext(ctx,
-		`INSERT INTO configs (id, kind, scope, user_id, agent_id, name, enabled, credential_key, data, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO configs (id, kind, scope, scope_id, user_id, agent_id, name, enabled, credential_key, data, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT (kind, user_id, agent_id, name) DO UPDATE SET
-			  scope=excluded.scope, enabled=excluded.enabled, credential_key=excluded.credential_key,
+			  scope=excluded.scope, scope_id=excluded.scope_id, enabled=excluded.enabled, credential_key=excluded.credential_key,
 			  data=excluded.data, updated_at=excluded.updated_at`,
-		c.ID, c.Kind, c.Scope, c.UserID, c.AgentID, c.Name, c.Enabled, c.CredentialKey, string(dataBytes), c.CreatedAt, c.UpdatedAt)
+		c.ID, c.Kind, c.Scope, c.ScopeID, c.UserID, c.AgentID, c.Name, c.Enabled, c.CredentialKey, string(dataBytes), c.CreatedAt, c.UpdatedAt)
 	return err
 }
 
@@ -2997,7 +3050,7 @@ type rowScanner interface {
 func scanConfigRow(row rowScanner) (*ConfigRecord, error) {
 	var c ConfigRecord
 	var dataStr string
-	if err := row.Scan(&c.ID, &c.Kind, &c.Scope, &c.UserID, &c.AgentID, &c.Name, &c.Enabled, &c.CredentialKey, &dataStr, &c.CreatedAt, &c.UpdatedAt); err != nil {
+	if err := row.Scan(&c.ID, &c.Kind, &c.Scope, &c.ScopeID, &c.UserID, &c.AgentID, &c.Name, &c.Enabled, &c.CredentialKey, &dataStr, &c.CreatedAt, &c.UpdatedAt); err != nil {
 		return nil, scanErr(err)
 	}
 	json.Unmarshal([]byte(dataStr), &c.Data)
@@ -3009,7 +3062,7 @@ func scanConfigs(rows *sql.Rows) ([]ConfigRecord, error) {
 	for rows.Next() {
 		var c ConfigRecord
 		var dataStr string
-		if err := rows.Scan(&c.ID, &c.Kind, &c.Scope, &c.UserID, &c.AgentID, &c.Name, &c.Enabled, &c.CredentialKey, &dataStr, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.Kind, &c.Scope, &c.ScopeID, &c.UserID, &c.AgentID, &c.Name, &c.Enabled, &c.CredentialKey, &dataStr, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, err
 		}
 		json.Unmarshal([]byte(dataStr), &c.Data)

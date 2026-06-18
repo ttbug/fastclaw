@@ -546,7 +546,14 @@ type ConfigRecord struct {
 	// sync with the (user_id, agent_id) source of truth. Kept so DB
 	// dumps and ad-hoc queries (`WHERE scope='system'`) stay readable
 	// without parsing the empty/non-empty pattern of the id columns.
-	Scope         string                 `json:"scope,omitempty"`
+	Scope string `json:"scope,omitempty"`
+	// ScopeID collapses (UserID, AgentID) into a single lookup key:
+	// whichever is non-empty wins (they're mutually exclusive for
+	// provider/setting rows). System rows have ScopeID="". The column
+	// enables single-column WHERE filters instead of the two-column
+	// (user_id, agent_id) pair. UserID and AgentID are kept for
+	// backward compatibility but ScopeID is the canonical lookup key.
+	ScopeID       string                 `json:"scopeId,omitempty"`
 	UserID        string                 `json:"userId,omitempty"`
 	AgentID       string                 `json:"agentId,omitempty"`
 	Name          string                 `json:"name"`
