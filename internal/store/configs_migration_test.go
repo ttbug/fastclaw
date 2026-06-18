@@ -122,7 +122,7 @@ func TestConfigsScopeMigration(t *testing.T) {
 	}{
 		{"cfg_sys", "", "", "system", true},
 		{"cfg_user", ownerUID, "", "user", true},
-		{"cfg_chan", ownerUID, agentID, "user-agent", true},
+		{"cfg_chan", "", "", "", false}, // migrated to channels table, deleted from configs
 		{"cfg_defaults", "", agentID, "agent", true},
 		{"cfg_aprov", "", agentID, "agent", true},
 		{"cfg_bindings", "", "", "", false},
