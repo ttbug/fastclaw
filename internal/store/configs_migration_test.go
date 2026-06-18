@@ -130,27 +130,32 @@ func TestConfigsScopeMigration(t *testing.T) {
 	}
 	for _, tc := range cases {
 		row := db.db.QueryRowContext(ctx,
-			`SELECT scope, scope_id, user_id, agent_id FROM configs WHERE id = ?`, tc.id)
-		var scope, scopeID, uid, aid string
-		err := row.Scan(&scope, &scopeID, &uid, &aid)
+			`SELECT scope, scope_id FROM configs WHERE id = ?`, tc.id)
+		var scope, scopeID string
+		err := row.Scan(&scope, &scopeID)
 		if !tc.mustExist {
 			if err == nil {
-				t.Errorf("%s should be deleted but still exists with (scope=%q scope_id=%q user=%q agent=%q)", tc.id, scope, scopeID, uid, aid)
+				t.Errorf("%s should be deleted but still exists with (scope=%q scope_id=%q)", tc.id, scope, scopeID)
 			}
 			continue
 		}
 		if err != nil {
 			t.Fatalf("scan %s: %v", tc.id, err)
 		}
-		if uid != tc.wantUser || aid != tc.wantAgent {
-			t.Errorf("%s: got (user=%q agent=%q); want (user=%q agent=%q)",
-				tc.id, uid, aid, tc.wantUser, tc.wantAgent)
-		}
 		if scope != tc.wantScope {
 			t.Errorf("%s: scope=%q; want %q", tc.id, scope, tc.wantScope)
 		}
 		if scopeID != tc.wantScopeID {
 			t.Errorf("%s: scope_id=%q; want %q", tc.id, scopeID, tc.wantScopeID)
+		}
+		// Verify convenience fields via GetConfig API.
+		cfg, err := db.GetConfig(ctx, tc.id)
+		if err != nil {
+			t.Fatalf("GetConfig %s: %v", tc.id, err)
+		}
+		if cfg.UserID != tc.wantUser || cfg.AgentID != tc.wantAgent {
+			t.Errorf("%s: got (user=%q agent=%q); want (user=%q agent=%q)",
+				tc.id, cfg.UserID, cfg.AgentID, tc.wantUser, tc.wantAgent)
 		}
 	}
 
@@ -185,8 +190,9 @@ func TestConfigsScopeMigration(t *testing.T) {
 	if len(listed) != 1 || listed[0].Name != "deepseek" {
 		t.Fatalf("ListConfigs returned %+v; want one 'deepseek' row", listed)
 	}
-	if listed[0].ScopeID != "u_new" {
-		t.Errorf("SaveConfig round-trip: scope_id=%q; want %q", listed[0].ScopeID, "u_new")
+	wantScopeID := "u_new/" + agentID
+	if listed[0].ScopeID != wantScopeID {
+		t.Errorf("SaveConfig round-trip: scope_id=%q; want %q", listed[0].ScopeID, wantScopeID)
 	}
 
 	// Verify scope_id is correctly computed for agent-only scope.

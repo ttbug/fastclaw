@@ -179,24 +179,18 @@ type Store interface {
 	DeleteAgentFile(ctx context.Context, agentID, userID, filename string) error
 	ListAgentFiles(ctx context.Context, agentID, userID string) ([]string, error)
 
-	// --- Configs (providers / channels / settings live here) ---
+	// --- Configs (providers / settings live here; channels have their own table) ---
 	//
-	// One table backs all three concept families. Each row is keyed by
-	// (kind, user_id, agent_id, name) and carries a JSON `data` payload.
+	// Each row is keyed by (kind, scope_id, name) and carries a JSON
+	// `data` payload.
 	//
 	//   kind="provider": LLM provider (name = provider key, e.g. "openai")
-	//   kind="channel":  channel adapter (name = channel type, e.g. "telegram")
 	//   kind="setting":  config namespace (name = "agents.defaults", "sandbox", …)
 	//
-	// `credential_key` is only populated for kind="channel" — it's the
-	// stable lookup key the inbound dispatcher uses to find the row when a
-	// message arrives. `enabled` lets a row hide an outer-scope row in the
-	// merge (used by channels: an inner-scope disabled row erases the
-	// outer entry).
+	// `enabled` lets a row hide an outer-scope row in the merge.
 	//
-	// ListConfigs(kind, userID, agentID) returns rows that match BOTH ids
-	// exactly. Pass empty for either to filter the corresponding ownership
-	// dimension. Pass both empty to get only system/global rows.
+	// ListConfigs(kind, userID, agentID) derives scope_id internally and
+	// returns matching rows. Pass both empty to get only system/global rows.
 	ListConfigs(ctx context.Context, kind, userID, agentID string) ([]ConfigRecord, error)
 	// ListConfigsByUser returns every row of a given kind owned by userID
 	// regardless of agent_id. The UserSpace assembly uses this to surface
@@ -522,21 +516,15 @@ const (
 )
 
 // ConfigRecord is one row of the configs table — the unified
-// home for providers, channels, and namespaced settings.
+// home for providers and namespaced settings (channels have their
+// own table now).
 //
 //   - kind says which family this row belongs to
-//   - (user_id, agent_id) says who owns it; the empty-string defaults
-//     give us four natural ownership levels:
-//     (”, ”)   = system / global
-//     (X, ”)    = user X's private config
-//     (”, Y)    = agent Y's "official" config (anyone using Y inherits)
-//     (X, Y)     = user X's per-agent override on agent Y (multi-tenant)
-//   - name is the lookup handle inside that family (provider key,
-//     channel type, or setting namespace)
+//   - scope_id is the single lookup key derived from (UserID, AgentID);
+//     whichever is non-empty wins. System rows have scope_id=””.
+//   - name is the lookup handle inside that family (provider key or
+//     setting namespace)
 //   - data is the family-specific JSON payload
-//
-// CredentialKey is only meaningful for kind="channel" — see
-// LookupChannelByCredential.
 type ConfigRecord struct {
 	ID   string `json:"id"`
 	Kind string `json:"kind"`
@@ -554,11 +542,18 @@ type ConfigRecord struct {
 	// enables single-column WHERE filters instead of the two-column
 	// (user_id, agent_id) pair. UserID and AgentID are kept for
 	// backward compatibility but ScopeID is the canonical lookup key.
-	ScopeID       string                 `json:"scopeId,omitempty"`
-	UserID        string                 `json:"userId,omitempty"`
-	AgentID       string                 `json:"agentId,omitempty"`
-	Name          string                 `json:"name"`
-	Enabled       bool                   `json:"enabled"`
+	ScopeID string `json:"scopeId,omitempty"`
+	// UserID and AgentID are convenience fields populated from
+	// scope/scope_id on read and used to compute scope_id on write.
+	// They are NOT persisted as DB columns.
+	UserID  string `json:"userId,omitempty"`
+	AgentID string `json:"agentId,omitempty"`
+	Name    string `json:"name"`
+	Enabled bool   `json:"enabled"`
+	// CredentialKey is a legacy convenience field. No longer persisted
+	// as a DB column (channels have their own table now). Kept on the
+	// struct so callers that synthesize ConfigRecord for hot-register
+	// don't break.
 	CredentialKey string                 `json:"credentialKey,omitempty"`
 	Data          map[string]interface{} `json:"data,omitempty"`
 	CreatedAt     time.Time              `json:"createdAt"`
@@ -596,6 +591,22 @@ func computeConfigScope(userID, agentID string) string {
 		return "agent"
 	default:
 		return "system"
+	}
+}
+
+// computeScopeID derives the single-column lookup key from (userID,
+// agentID). The encoding matches LegacyScopeID: user-agent rows use
+// "userID/agentID" so the two halves are recoverable on read.
+func computeScopeID(userID, agentID string) string {
+	switch {
+	case userID != "" && agentID != "":
+		return userID + "/" + agentID
+	case userID != "":
+		return userID
+	case agentID != "":
+		return agentID
+	default:
+		return ""
 	}
 }
 
