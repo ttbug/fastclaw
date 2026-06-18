@@ -163,6 +163,9 @@ func (d *DBStore) Migrate(ctx context.Context) error {
 	if err := d.migrateChannelsFromConfigs(ctx); err != nil {
 		return fmt.Errorf("migrate channels from configs: %w", err)
 	}
+	if err := d.migrateConfigsDropLegacyColumns(ctx); err != nil {
+		return fmt.Errorf("migrate configs drop legacy columns: %w", err)
+	}
 	return nil
 }
 
@@ -534,6 +537,14 @@ func (d *DBStore) migrateConfigsMergeScopeID(ctx context.Context) error {
 	}
 	// Backfill: scope_id = user_id when user_id != '', else agent_id.
 	// Only touch rows where scope_id is still empty to stay idempotent.
+	// Skip if user_id column no longer exists (post-drop migration).
+	hasUserID, err := d.tableHasColumn(ctx, "configs", "user_id")
+	if err != nil {
+		return err
+	}
+	if !hasUserID {
+		return nil
+	}
 	if _, err := d.db.ExecContext(ctx, `UPDATE configs SET scope_id = CASE
 		WHEN user_id != '' THEN user_id
 		WHEN agent_id != '' THEN agent_id
@@ -637,6 +648,16 @@ func (d *DBStore) migrateConfigsScopeToUserAgent(ctx context.Context) error {
 		return err
 	}
 	if !hasUserID {
+		// If credential_key is also missing, the table has already been
+		// through the full lifecycle (scope→user_id→drop), so there's
+		// nothing to do.
+		hasCredKey, err := d.tableHasColumn(ctx, "configs", "credential_key")
+		if err != nil {
+			return err
+		}
+		if !hasCredKey {
+			return nil
+		}
 		// Probe `scope_id` rather than `scope`: the post-refactor
 		// schema reintroduces `scope` as a denormalized label, so its
 		// presence no longer means "this is the legacy shape".
@@ -656,11 +677,15 @@ func (d *DBStore) migrateConfigsScopeToUserAgent(ctx context.Context) error {
 			}
 		}
 	}
-	// Always assert the lookup index — both upgrade and fresh-install
-	// paths flow through here. CREATE INDEX IF NOT EXISTS is idempotent.
-	if _, err := d.db.ExecContext(ctx,
-		`CREATE INDEX IF NOT EXISTS idx_configs_lookup ON configs (kind, user_id, agent_id)`); err != nil {
-		return fmt.Errorf("create configs index: %w", err)
+	// Assert the lookup index only if user_id still exists (pre-drop
+	// state). After migrateConfigsDropLegacyColumns runs, the column is
+	// gone and the index would fail. The drop migration creates its own
+	// idx_configs_scope index as a replacement.
+	if hasUserID {
+		if _, err := d.db.ExecContext(ctx,
+			`CREATE INDEX IF NOT EXISTS idx_configs_lookup ON configs (kind, user_id, agent_id)`); err != nil {
+			return fmt.Errorf("create configs index: %w", err)
+		}
 	}
 	return nil
 }
@@ -1565,23 +1590,14 @@ func (d *DBStore) migrationSQL() []string {
 		`CREATE TABLE IF NOT EXISTS configs (
 			id TEXT PRIMARY KEY,
 			kind TEXT NOT NULL,
-			-- scope is a denormalized 'system'|'user'|'agent'|'user-agent'
-			-- label derived from (user_id, agent_id). SaveConfig writes it
-			-- on every upsert; nothing else writes it. Kept for DB-dump
-			-- readability and ad-hoc admin queries.
 			scope TEXT NOT NULL DEFAULT '',
-			-- scope_id merges user_id/agent_id into a single lookup key:
-			-- whichever is non-empty wins. System rows have scope_id=''.
 			scope_id TEXT NOT NULL DEFAULT '',
-			user_id TEXT NOT NULL DEFAULT '',
-			agent_id TEXT NOT NULL DEFAULT '',
 			name TEXT NOT NULL,
 			enabled BOOLEAN NOT NULL DEFAULT TRUE,
-			credential_key TEXT NOT NULL DEFAULT '',
 			data TEXT NOT NULL DEFAULT '{}',
 			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			UNIQUE (kind, user_id, agent_id, name)
+			UNIQUE (kind, scope_id, name)
 		)`,
 		// idx_configs_lookup creation moved to
 		// migrateConfigsScopeToUserAgent so it runs after the column-add
@@ -1589,7 +1605,7 @@ func (d *DBStore) migrationSQL() []string {
 		// don't exist yet at this point in migrationSQL). Fresh installs
 		// hit the IF NOT EXISTS path inside the migrator and still get
 		// the index.
-		`CREATE INDEX IF NOT EXISTS idx_configs_credential ON configs (kind, credential_key)`,
+		`CREATE INDEX IF NOT EXISTS idx_configs_scope ON configs (kind, scope_id)`,
 		`CREATE TABLE IF NOT EXISTS cron_jobs (
 			id TEXT PRIMARY KEY,
 			user_id TEXT NOT NULL DEFAULT '',
@@ -2879,21 +2895,15 @@ func (d *DBStore) ListAgentFiles(ctx context.Context, agentID, userID string) ([
 // first. Existing callers that pass a real scopeID continue to get
 // exact-match semantics. System rows have scope_id="" anyway so
 // system-scope queries are unaffected by this widening.
-const configSelectCols = `id, kind, scope, scope_id, user_id, agent_id, name, enabled, credential_key, data, created_at, updated_at`
+const configSelectCols = `id, kind, scope, scope_id, name, enabled, data, created_at, updated_at`
 
 func (d *DBStore) ListConfigs(ctx context.Context, kind, userID, agentID string) ([]ConfigRecord, error) {
-	// Derive scope_id from the caller's (userID, agentID) pair — single
-	// column lookup is faster. The two pairs are mutually exclusive for
-	// provider/setting rows (the only kinds that remain in configs).
-	scopeID := userID
-	if scopeID == "" {
-		scopeID = agentID
-	}
+	scopeID := computeScopeID(userID, agentID)
 	rows, err := d.db.QueryContext(ctx,
 		fmt.Sprintf(`SELECT `+configSelectCols+`
-			FROM configs WHERE kind = %s AND scope_id = %s AND user_id = %s AND agent_id = %s ORDER BY name`,
-			d.ph(1), d.ph(2), d.ph(3), d.ph(4)),
-		kind, scopeID, userID, agentID)
+			FROM configs WHERE kind = %s AND scope_id = %s ORDER BY name`,
+			d.ph(1), d.ph(2)),
+		kind, scopeID)
 	if err != nil {
 		return nil, err
 	}
@@ -2902,11 +2912,26 @@ func (d *DBStore) ListConfigs(ctx context.Context, kind, userID, agentID string)
 }
 
 func (d *DBStore) ListConfigsByUser(ctx context.Context, kind, userID string) ([]ConfigRecord, error) {
+	// scope_id contains the userID for user-scoped rows. For user-agent
+	// rows scope_id is "userID/agentID", so we use a prefix match.
+	if userID == "" {
+		// System rows: scope_id = ''.
+		rows, err := d.db.QueryContext(ctx,
+			fmt.Sprintf(`SELECT `+configSelectCols+`
+				FROM configs WHERE kind = %s AND scope_id = '' ORDER BY name`,
+				d.ph(1)),
+			kind)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		return scanConfigs(rows)
+	}
 	rows, err := d.db.QueryContext(ctx,
 		fmt.Sprintf(`SELECT `+configSelectCols+`
-			FROM configs WHERE kind = %s AND user_id = %s ORDER BY agent_id, name`,
-			d.ph(1), d.ph(2)),
-		kind, userID)
+			FROM configs WHERE kind = %s AND (scope_id = %s OR scope_id LIKE %s) ORDER BY name`,
+			d.ph(1), d.ph(2), d.ph(3)),
+		kind, userID, userID+"/%")
 	if err != nil {
 		return nil, err
 	}
@@ -2917,7 +2942,7 @@ func (d *DBStore) ListConfigsByUser(ctx context.Context, kind, userID string) ([
 func (d *DBStore) QueryAllConfigs(ctx context.Context, kind string) ([]ConfigRecord, error) {
 	rows, err := d.db.QueryContext(ctx,
 		fmt.Sprintf(`SELECT `+configSelectCols+`
-			FROM configs WHERE kind = %s ORDER BY user_id, agent_id, name`,
+			FROM configs WHERE kind = %s ORDER BY scope_id, name`,
 			d.ph(1)),
 		kind)
 	if err != nil {
@@ -2934,15 +2959,12 @@ func (d *DBStore) GetConfig(ctx context.Context, id string) (*ConfigRecord, erro
 }
 
 func (d *DBStore) GetConfigByName(ctx context.Context, kind, userID, agentID, name string) (*ConfigRecord, error) {
-	scopeID := userID
-	if scopeID == "" {
-		scopeID = agentID
-	}
+	scopeID := computeScopeID(userID, agentID)
 	row := d.db.QueryRowContext(ctx,
 		fmt.Sprintf(`SELECT `+configSelectCols+`
-			FROM configs WHERE kind = %s AND scope_id = %s AND user_id = %s AND agent_id = %s AND name = %s`,
-			d.ph(1), d.ph(2), d.ph(3), d.ph(4), d.ph(5)),
-		kind, scopeID, userID, agentID, name)
+			FROM configs WHERE kind = %s AND scope_id = %s AND name = %s`,
+			d.ph(1), d.ph(2), d.ph(3)),
+		kind, scopeID, name)
 	return scanConfigRow(row)
 }
 
@@ -2950,15 +2972,12 @@ func (d *DBStore) SaveConfig(ctx context.Context, c *ConfigRecord) error {
 	if c.Kind == "" || c.Name == "" {
 		return errors.New("store: SaveConfig requires kind and name")
 	}
-	// scope is denormalized from (user_id, agent_id). SaveConfig is the
-	// only writer — recompute on every upsert so a caller-supplied
-	// stale value can't corrupt the column. The DB-dump readability
-	// promise depends on this invariant.
+	// Compute scope and scope_id from (UserID, AgentID) convenience
+	// fields when they're set. These fields are kept on the Go struct
+	// for backward compat with callers but are NOT persisted as columns.
 	c.Scope = computeConfigScope(c.UserID, c.AgentID)
-	// scope_id merges (user_id, agent_id) into a single lookup key.
-	c.ScopeID = c.UserID
 	if c.ScopeID == "" {
-		c.ScopeID = c.AgentID
+		c.ScopeID = computeScopeID(c.UserID, c.AgentID)
 	}
 	now := time.Now().UTC()
 	if c.CreatedAt.IsZero() {
@@ -2966,31 +2985,25 @@ func (d *DBStore) SaveConfig(ctx context.Context, c *ConfigRecord) error {
 	}
 	c.UpdatedAt = now
 	if c.ID == "" {
-		// Random id; the (kind, user_id, agent_id, name) unique index is
-		// what guarantees idempotency below. We used to derive id from a
-		// hash of those columns, but the column rename (scope/scope_id →
-		// user_id/agent_id) changed the hash for the same logical row,
-		// making the legacy and new ids drift apart. Upserting on the
-		// natural key sidesteps that mess entirely.
 		c.ID = randomConfigID()
 	}
 	dataBytes, _ := json.Marshal(c.Data)
 	if d.dialect == "postgres" {
 		_, err := d.db.ExecContext(ctx,
-			`INSERT INTO configs (id, kind, scope, scope_id, user_id, agent_id, name, enabled, credential_key, data, created_at, updated_at)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-				ON CONFLICT (kind, user_id, agent_id, name) DO UPDATE SET
-				  scope=$3, scope_id=$4, enabled=$8, credential_key=$9, data=$10, updated_at=$12`,
-			c.ID, c.Kind, c.Scope, c.ScopeID, c.UserID, c.AgentID, c.Name, c.Enabled, c.CredentialKey, string(dataBytes), c.CreatedAt, c.UpdatedAt)
+			`INSERT INTO configs (id, kind, scope, scope_id, name, enabled, data, created_at, updated_at)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+				ON CONFLICT (kind, scope_id, name) DO UPDATE SET
+				  scope=$3, enabled=$6, data=$7, updated_at=$9`,
+			c.ID, c.Kind, c.Scope, c.ScopeID, c.Name, c.Enabled, string(dataBytes), c.CreatedAt, c.UpdatedAt)
 		return err
 	}
 	_, err := d.db.ExecContext(ctx,
-		`INSERT INTO configs (id, kind, scope, scope_id, user_id, agent_id, name, enabled, credential_key, data, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT (kind, user_id, agent_id, name) DO UPDATE SET
-			  scope=excluded.scope, scope_id=excluded.scope_id, enabled=excluded.enabled, credential_key=excluded.credential_key,
+		`INSERT INTO configs (id, kind, scope, scope_id, name, enabled, data, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT (kind, scope_id, name) DO UPDATE SET
+			  scope=excluded.scope, enabled=excluded.enabled,
 			  data=excluded.data, updated_at=excluded.updated_at`,
-		c.ID, c.Kind, c.Scope, c.ScopeID, c.UserID, c.AgentID, c.Name, c.Enabled, c.CredentialKey, string(dataBytes), c.CreatedAt, c.UpdatedAt)
+		c.ID, c.Kind, c.Scope, c.ScopeID, c.Name, c.Enabled, string(dataBytes), c.CreatedAt, c.UpdatedAt)
 	return err
 }
 
@@ -3017,12 +3030,10 @@ func (d *DBStore) DeleteConfig(ctx context.Context, id string) error {
 }
 
 func (d *DBStore) LookupChannelByCredential(ctx context.Context, channelType, credKey string) (*ConfigRecord, error) {
-	row := d.db.QueryRowContext(ctx,
-		fmt.Sprintf(`SELECT `+configSelectCols+`
-			FROM configs WHERE kind = 'channel' AND name = %s AND credential_key = %s LIMIT 1`,
-			d.ph(1), d.ph(2)),
-		channelType, credKey)
-	return scanConfigRow(row)
+	// credential_key column has been removed; channels now live in
+	// the channels table. Return ErrNotFound so callers fall through
+	// to their channels-table code path.
+	return nil, ErrNotFound
 }
 
 // configRowID produces a stable id for a (kind, scope, scope_id,
@@ -3050,10 +3061,23 @@ type rowScanner interface {
 func scanConfigRow(row rowScanner) (*ConfigRecord, error) {
 	var c ConfigRecord
 	var dataStr string
-	if err := row.Scan(&c.ID, &c.Kind, &c.Scope, &c.ScopeID, &c.UserID, &c.AgentID, &c.Name, &c.Enabled, &c.CredentialKey, &dataStr, &c.CreatedAt, &c.UpdatedAt); err != nil {
+	if err := row.Scan(&c.ID, &c.Kind, &c.Scope, &c.ScopeID, &c.Name, &c.Enabled, &dataStr, &c.CreatedAt, &c.UpdatedAt); err != nil {
 		return nil, scanErr(err)
 	}
 	json.Unmarshal([]byte(dataStr), &c.Data)
+	// Populate convenience fields from scope for backward compat.
+	switch c.Scope {
+	case "user":
+		c.UserID = c.ScopeID
+	case "agent":
+		c.AgentID = c.ScopeID
+	case "user-agent":
+		// user-agent rows encode "userID/agentID" in scope_id.
+		if idx := strings.Index(c.ScopeID, "/"); idx >= 0 {
+			c.UserID = c.ScopeID[:idx]
+			c.AgentID = c.ScopeID[idx+1:]
+		}
+	}
 	return &c, nil
 }
 
@@ -3062,10 +3086,21 @@ func scanConfigs(rows *sql.Rows) ([]ConfigRecord, error) {
 	for rows.Next() {
 		var c ConfigRecord
 		var dataStr string
-		if err := rows.Scan(&c.ID, &c.Kind, &c.Scope, &c.ScopeID, &c.UserID, &c.AgentID, &c.Name, &c.Enabled, &c.CredentialKey, &dataStr, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.Kind, &c.Scope, &c.ScopeID, &c.Name, &c.Enabled, &dataStr, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, err
 		}
 		json.Unmarshal([]byte(dataStr), &c.Data)
+		switch c.Scope {
+		case "user":
+			c.UserID = c.ScopeID
+		case "agent":
+			c.AgentID = c.ScopeID
+		case "user-agent":
+			if idx := strings.Index(c.ScopeID, "/"); idx >= 0 {
+				c.UserID = c.ScopeID[:idx]
+				c.AgentID = c.ScopeID[idx+1:]
+			}
+		}
 		out = append(out, c)
 	}
 	return out, rows.Err()
@@ -3295,6 +3330,84 @@ func (d *DBStore) migrateChannelsFromConfigs(ctx context.Context) error {
 	}
 	if len(configs) > 0 {
 		slog.Info("migrated channel configs to channels table", "count", len(configs))
+	}
+	return nil
+}
+
+// migrateConfigsDropLegacyColumns removes the user_id, agent_id, and
+// credential_key columns from configs. These are redundant: scope_id
+// replaces user_id+agent_id, and credential_key was only used by
+// channels which now have their own table.
+//
+// Idempotent: skips if user_id column no longer exists.
+func (d *DBStore) migrateConfigsDropLegacyColumns(ctx context.Context) error {
+	has, err := d.tableHasColumn(ctx, "configs", "user_id")
+	if err != nil {
+		return err
+	}
+	if !has {
+		// Already migrated — nothing to do.
+		return nil
+	}
+
+	if d.dialect == "postgres" {
+		// Recompute scope_id for user-agent rows before dropping the columns.
+		if _, err := d.db.ExecContext(ctx,
+			`UPDATE configs SET scope_id = user_id || '/' || agent_id
+			 WHERE user_id != '' AND agent_id != ''`); err != nil {
+			return fmt.Errorf("postgres recompute scope_id: %w", err)
+		}
+		// Postgres supports ALTER TABLE DROP COLUMN directly.
+		stmts := []string{
+			`ALTER TABLE configs DROP CONSTRAINT IF EXISTS configs_kind_user_id_agent_id_name_key`,
+			`DROP INDEX IF EXISTS idx_configs_lookup`,
+			`DROP INDEX IF EXISTS idx_configs_credential`,
+			`ALTER TABLE configs DROP COLUMN IF EXISTS user_id`,
+			`ALTER TABLE configs DROP COLUMN IF EXISTS agent_id`,
+			`ALTER TABLE configs DROP COLUMN IF EXISTS credential_key`,
+			`CREATE UNIQUE INDEX IF NOT EXISTS configs_kind_scope_id_name_key ON configs (kind, scope_id, name)`,
+			`CREATE INDEX IF NOT EXISTS idx_configs_scope ON configs (kind, scope_id)`,
+		}
+		for _, s := range stmts {
+			if _, err := d.db.ExecContext(ctx, s); err != nil {
+				return fmt.Errorf("postgres migrate configs drop legacy: %w\nSQL: %s", err, s)
+			}
+		}
+		return nil
+	}
+
+	// SQLite: rebuild the table via copy-rename.
+	stmts := []string{
+		`CREATE TABLE configs_new (
+			id TEXT PRIMARY KEY,
+			kind TEXT NOT NULL,
+			scope TEXT NOT NULL DEFAULT '',
+			scope_id TEXT NOT NULL DEFAULT '',
+			name TEXT NOT NULL,
+			enabled BOOLEAN NOT NULL DEFAULT TRUE,
+			data TEXT NOT NULL DEFAULT '{}',
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE (kind, scope_id, name)
+		)`,
+		// Recompute scope_id: user-agent rows (both user_id and agent_id
+		// non-empty) get "user_id/agent_id"; other rows keep scope_id as-is.
+		`INSERT INTO configs_new (id, kind, scope, scope_id, name, enabled, data, created_at, updated_at)
+		   SELECT id, kind, scope,
+		     CASE WHEN user_id != '' AND agent_id != '' THEN user_id || '/' || agent_id
+		          ELSE scope_id END,
+		     name, enabled, data, created_at, updated_at
+		   FROM configs`,
+		`DROP TABLE configs`,
+		`ALTER TABLE configs_new RENAME TO configs`,
+		`DROP INDEX IF EXISTS idx_configs_lookup`,
+		`DROP INDEX IF EXISTS idx_configs_credential`,
+		`CREATE INDEX IF NOT EXISTS idx_configs_scope ON configs (kind, scope_id)`,
+	}
+	for _, s := range stmts {
+		if _, err := d.db.ExecContext(ctx, s); err != nil {
+			return fmt.Errorf("sqlite migrate configs drop legacy: %w\nSQL: %s", err, s)
+		}
 	}
 	return nil
 }
