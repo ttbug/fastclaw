@@ -29,6 +29,7 @@ import AgentPluginsPage from "@/app/agents/[id]/plugins/page";
 import AgentMCPPage from "@/app/agents/[id]/mcp/page";
 import AgentChannelsPage from "@/app/agents/[id]/channels/page";
 import AgentSchedulerPage from "@/app/agents/[id]/scheduler/page";
+import AgentMCPPage from "@/app/agents/[id]/mcp/page";
 import AgentUsagePage from "@/app/agents/[id]/usage/page";
 import AccountSettingsPage from "@/app/settings/account/page";
 import GeneralSettingsPage from "@/app/settings/general/page";
@@ -41,6 +42,7 @@ export type AgentSettingsTab =
   | "models"
   | "context"
   | "skills"
+  | "mcp"
   | "plugins"
   | "mcp"
   | "channels"
@@ -58,6 +60,7 @@ const AGENT_TABS: Array<{ id: AgentSettingsTab; label: string; icon: TabIcon }> 
   { id: "models", label: "Models", icon: BrainIcon },
   { id: "context", label: "Context", icon: LayersIcon },
   { id: "skills", label: "Skills", icon: SparklesIcon },
+  { id: "mcp", label: "MCP", icon: ServerIcon },
   { id: "plugins", label: "Plugins", icon: Plug },
   { id: "mcp", label: "MCP", icon: ServerIcon },
   { id: "channels", label: "Channels", icon: RadioIcon },
@@ -173,6 +176,7 @@ export function AgentSettingsDialog({
             (role === "viewer" ? <UserModelsPage /> : <AgentModelsPage />)}
           {tab === "context" && <AgentContextPage />}
           {tab === "skills" && <AgentSkillsPage />}
+          {tab === "mcp" && <AgentMCPPage />}
           {tab === "plugins" && <AgentPluginsPage />}
           {tab === "mcp" && <AgentMCPPage />}
           {tab === "channels" && <AgentChannelsPage />}

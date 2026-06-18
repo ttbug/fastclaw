@@ -38,7 +38,9 @@ export async function getRegistration(): Promise<{ open: boolean }> {
   return res.json();
 }
 
-export async function setRegistration(open: boolean): Promise<{ open: boolean }> {
+export async function setRegistration(
+  open: boolean,
+): Promise<{ open: boolean }> {
   const res = await apiFetch("/api/admin/registration", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -72,8 +74,8 @@ export interface AgentDetail {
   id: string;
   name?: string;
   description?: string;
-  avatarUrl?: string;       // /api/agents/{id}/files/avatar.png — may 404
-  userId?: string;          // owner's user id (agents.user_id)
+  avatarUrl?: string; // /api/agents/{id}/files/avatar.png — may 404
+  userId?: string; // owner's user id (agents.user_id)
   // role distinguishes agents the caller owns from agents accessed via
   // a public link. "viewer" gates UI out of configuration tabs
   // (Customize / Skills / Channels / Scheduler / Models). Backend
@@ -293,10 +295,13 @@ export function getAuthToken(): string {
 // (e.g. /agents/<id>/chat/<sid>/?actAs=<uid> reached from the admin Chats
 // page) actually reads/writes against that user's scope. The middleware-
 // level actAs lock makes these requests read-only.
-export async function apiFetch(url: string, init?: RequestInit): Promise<Response> {
+export async function apiFetch(
+  url: string,
+  init?: RequestInit,
+): Promise<Response> {
   const token = getAuthToken();
   const headers: Record<string, string> = {
-    ...(init?.headers as Record<string, string> || {}),
+    ...((init?.headers as Record<string, string>) || {}),
   };
   if (token) {
     headers["Authorization"] = `Bearer ${token}`;
@@ -304,7 +309,10 @@ export async function apiFetch(url: string, init?: RequestInit): Promise<Respons
   if (typeof window !== "undefined") {
     const pageActAs = new URLSearchParams(window.location.search).get("actAs");
     if (pageActAs && !/[?&]actAs=/.test(url)) {
-      url += (url.includes("?") ? "&" : "?") + "actAs=" + encodeURIComponent(pageActAs);
+      url +=
+        (url.includes("?") ? "&" : "?") +
+        "actAs=" +
+        encodeURIComponent(pageActAs);
     }
   }
   return fetch(url, { credentials: "same-origin", ...init, headers });
@@ -335,7 +343,10 @@ export interface MeResponse {
   error?: string;
 }
 
-export async function login(loginField: string, password: string): Promise<MeResponse> {
+export async function login(
+  loginField: string,
+  password: string,
+): Promise<MeResponse> {
   const res = await fetch("/api/login", {
     method: "POST",
     credentials: "same-origin",
@@ -355,7 +366,10 @@ export async function getMe(): Promise<MeResponse> {
   return res.json();
 }
 
-export async function updateMe(req: { displayName: string; avatarUrl: string }) {
+export async function updateMe(req: {
+  displayName: string;
+  avatarUrl: string;
+}) {
   const res = await apiFetch("/api/me", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -364,7 +378,10 @@ export async function updateMe(req: { displayName: string; avatarUrl: string }) 
   return res.json();
 }
 
-export async function changeMyPassword(req: { oldPassword: string; newPassword: string }) {
+export async function changeMyPassword(req: {
+  oldPassword: string;
+  newPassword: string;
+}) {
   const res = await apiFetch("/api/me/password", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -397,7 +414,9 @@ export interface OnboardRequest {
   sandboxBoxlitePrefix?: string;
 }
 
-export async function onboard(req: OnboardRequest): Promise<{ ok: boolean; error?: string }> {
+export async function onboard(
+  req: OnboardRequest,
+): Promise<{ ok: boolean; error?: string }> {
   const res = await fetch("/api/onboard", {
     method: "POST",
     credentials: "same-origin",
@@ -440,7 +459,12 @@ export async function adminCreateUser(req: {
 
 export async function adminUpdateUser(
   id: string,
-  req: { displayName?: string; role?: string; status?: string; agentQuota?: number | null },
+  req: {
+    displayName?: string;
+    role?: string;
+    status?: string;
+    agentQuota?: number | null;
+  },
 ) {
   const res = await apiFetch(`/api/users/${id}`, {
     method: "PUT",
@@ -473,7 +497,11 @@ export async function listApikeys() {
 
 export type ApikeyType = "admin" | "user" | "agent";
 
-export async function createApikey(req: { name: string; type: ApikeyType; agentIds?: string[] }) {
+export async function createApikey(req: {
+  name: string;
+  type: ApikeyType;
+  agentIds?: string[];
+}) {
   const res = await apiFetch("/api/apikeys", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -511,7 +539,7 @@ export interface ProviderRow {
   scopeId: string;
   name: string;
   apiBase?: string;
-  apiKey?: string;       // masked on read
+  apiKey?: string; // masked on read
   apiType?: string;
   authType?: string;
   models?: ModelEntry[];
@@ -524,7 +552,7 @@ export interface ChannelRow {
   scopeId: string;
   type: string;
   enabled: boolean;
-  botToken?: string;     // masked on read
+  botToken?: string; // masked on read
   appToken?: string;
   credentialKey?: string;
   updatedAt?: string;
@@ -621,7 +649,10 @@ export async function createScopedChannel(req: {
   return res.json();
 }
 
-export async function updateScopedChannel(id: string, req: Partial<ChannelRow>) {
+export async function updateScopedChannel(
+  id: string,
+  req: Partial<ChannelRow>,
+) {
   const res = await apiFetch(`/api/scoped-channels/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -631,7 +662,9 @@ export async function updateScopedChannel(id: string, req: Partial<ChannelRow>) 
 }
 
 export async function deleteScopedChannel(id: string) {
-  const res = await apiFetch(`/api/scoped-channels/${id}`, { method: "DELETE" });
+  const res = await apiFetch(`/api/scoped-channels/${id}`, {
+    method: "DELETE",
+  });
   return res.json();
 }
 
@@ -642,7 +675,13 @@ export async function getStatus(): Promise<StatusResponse> {
 }
 
 // Provider
-export async function testProvider(config: { apiBase: string; apiKey: string; model: string; apiType?: string; authType?: string }) {
+export async function testProvider(config: {
+  apiBase: string;
+  apiKey: string;
+  model: string;
+  apiType?: string;
+  authType?: string;
+}) {
   const res = await apiFetch("/api/test-provider", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -753,7 +792,10 @@ export async function getScopePreview(
   );
   if (!res.ok) return { status: "none" };
   const data = await res.json().catch(() => ({ status: "none" }));
-  return { previewUrl: data.previewUrl as string | undefined, status: (data.status as string) || "none" };
+  return {
+    previewUrl: data.previewUrl as string | undefined,
+    status: (data.status as string) || "none",
+  };
 }
 
 // getScopePreviewLogs tails the build/dev log for the current chat scope.
@@ -796,7 +838,10 @@ export async function getChangedFiles(
   );
   if (!res.ok) return { files: [], available: false };
   const data = await res.json().catch(() => ({ files: [], available: false }));
-  return { files: (data.files || []) as WorkspaceFile[], available: !!data.available };
+  return {
+    files: (data.files || []) as WorkspaceFile[],
+    available: !!data.available,
+  };
 }
 
 // Chat
@@ -839,7 +884,10 @@ export interface TodoState {
 // Returns {items: [], raw: ""} when no file exists yet (fresh session
 // or a turn that didn't use the todo convention) — caller should hide
 // the panel in that case.
-export async function getChatTodo(agentId: string, sessionId: string): Promise<TodoState> {
+export async function getChatTodo(
+  agentId: string,
+  sessionId: string,
+): Promise<TodoState> {
   if (!agentId || !sessionId) return { items: [], raw: "" };
   const res = await apiFetch(
     `/api/chat/todo?agentId=${encodeURIComponent(agentId)}&sessionId=${encodeURIComponent(sessionId)}`,
@@ -852,8 +900,13 @@ export async function getChatTodo(agentId: string, sessionId: string): Promise<T
   };
 }
 
-export async function getChatHistory(agentId: string, sessionId: string): Promise<ChatHistoryMessage[]> {
-  const res = await apiFetch(`/api/chat/history?agentId=${encodeURIComponent(agentId)}&sessionId=${encodeURIComponent(sessionId)}`);
+export async function getChatHistory(
+  agentId: string,
+  sessionId: string,
+): Promise<ChatHistoryMessage[]> {
+  const res = await apiFetch(
+    `/api/chat/history?agentId=${encodeURIComponent(agentId)}&sessionId=${encodeURIComponent(sessionId)}`,
+  );
   if (!res.ok) return [];
   const data = await res.json();
   // Backend wraps in { history: [...] }; older shape was a raw array.
@@ -872,13 +925,20 @@ export interface ChatHistoryResult {
   latestEventSeq: number; // -1 when there's nothing logged yet
 }
 
-export async function getChatHistoryWithCursor(agentId: string, sessionId: string): Promise<ChatHistoryResult> {
-  const res = await apiFetch(`/api/chat/history?agentId=${encodeURIComponent(agentId)}&sessionId=${encodeURIComponent(sessionId)}`);
+export async function getChatHistoryWithCursor(
+  agentId: string,
+  sessionId: string,
+): Promise<ChatHistoryResult> {
+  const res = await apiFetch(
+    `/api/chat/history?agentId=${encodeURIComponent(agentId)}&sessionId=${encodeURIComponent(sessionId)}`,
+  );
   if (!res.ok) return { history: [], latestEventSeq: -1 };
   const data = await res.json();
   const history: ChatHistoryMessage[] = Array.isArray(data?.history)
     ? data.history
-    : Array.isArray(data) ? data : [];
+    : Array.isArray(data)
+      ? data
+      : [];
   const seqRaw = data?.latestEventSeq;
   const latestEventSeq = typeof seqRaw === "number" ? seqRaw : -1;
   return { history, latestEventSeq };
@@ -965,7 +1025,6 @@ export async function deleteProject(
   return res.json();
 }
 
-
 // AdminChatSessionEntry extends ChatSessionEntry with the (user, agent)
 // ownership info needed to render a cross-tenant Chats listing — agent
 // name + owner display fields, joined server-side so the client doesn't
@@ -986,8 +1045,12 @@ export async function adminListChats(): Promise<AdminChatSessionEntry[]> {
   return Array.isArray(data?.sessions) ? data.sessions : [];
 }
 
-export async function getChatSessions(agentId: string): Promise<ChatSessionEntry[]> {
-  const res = await apiFetch(`/api/chat/sessions?agentId=${encodeURIComponent(agentId)}`);
+export async function getChatSessions(
+  agentId: string,
+): Promise<ChatSessionEntry[]> {
+  const res = await apiFetch(
+    `/api/chat/sessions?agentId=${encodeURIComponent(agentId)}`,
+  );
   if (!res.ok) return [];
   const data = await res.json();
   // Backend wraps the list in { sessions: [...] }. Tolerate raw array
@@ -996,12 +1059,19 @@ export async function getChatSessions(agentId: string): Promise<ChatSessionEntry
   return Array.isArray(data) ? data : [];
 }
 
-export async function renameChatSession(agentId: string, sessionId: string, title: string) {
-  const res = await apiFetch(`/api/chat/sessions/${encodeURIComponent(sessionId)}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ agentId, title }),
-  });
+export async function renameChatSession(
+  agentId: string,
+  sessionId: string,
+  title: string,
+) {
+  const res = await apiFetch(
+    `/api/chat/sessions/${encodeURIComponent(sessionId)}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agentId, title }),
+    },
+  );
   return res.json();
 }
 
@@ -1034,7 +1104,11 @@ export async function moveChatSessionToProject(
   return res.json();
 }
 
-export async function sendChat(agentId: string, sessionId: string, message: string): Promise<{ response: string }> {
+export async function sendChat(
+  agentId: string,
+  sessionId: string,
+  message: string,
+): Promise<{ response: string }> {
   const res = await apiFetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1158,7 +1232,9 @@ export async function sendChatStream(
     try {
       const data = await res.json();
       if (data?.error) msg = String(data.error);
-    } catch { /* non-JSON body — keep status fallback */ }
+    } catch {
+      /* non-JSON body — keep status fallback */
+    }
     throw new Error(msg);
   }
   if (!res.body) throw new Error("stream failed: no body");
@@ -1188,10 +1264,16 @@ export async function sendChatStream(
         if (evt.type === "done") {
           finished = true;
         }
-      } catch { /* skip malformed frames */ }
+      } catch {
+        /* skip malformed frames */
+      }
     }
   }
-  try { await reader.cancel(); } catch { /* ignore */ }
+  try {
+    await reader.cancel();
+  } catch {
+    /* ignore */
+  }
 }
 
 export interface UploadedFile {
@@ -1207,10 +1289,13 @@ export async function uploadAgentFiles(
   const fd = new FormData();
   for (const f of files) fd.append("file", f, f.name);
   const qs = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : "";
-  const res = await apiFetch(`/api/agents/${encodeURIComponent(agentId)}/files${qs}`, {
-    method: "POST",
-    body: fd,
-  });
+  const res = await apiFetch(
+    `/api/agents/${encodeURIComponent(agentId)}/files${qs}`,
+    {
+      method: "POST",
+      body: fd,
+    },
+  );
   if (!res.ok) throw new Error(`upload failed: ${res.status}`);
   const data = await res.json();
   return (data.files || []) as UploadedFile[];
@@ -1339,6 +1424,10 @@ export interface AgentUpdatePayload {
   plugins?: Record<string, boolean>;
   pluginsReset?: boolean;
   maxToolIterations?: number;
+  // MCP servers whole-map replace. Omit to leave untouched, send {}
+  // to clear, or send the full desired map to replace.
+  mcpServers?: Record<string, MCPServerConfig>;
+  mcpServersReset?: boolean;
 }
 
 export async function updateAgent(id: string, agent: AgentUpdatePayload) {
@@ -1370,6 +1459,15 @@ export async function listHookPlugins(): Promise<HookPlugin[]> {
   }
 }
 
+export interface MCPServerConfig {
+  type: "http" | "stdio";
+  url?: string;
+  headers?: Record<string, string>;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+}
+
 export interface AgentFileConfig {
   model?: string;
   maxTokens?: number;
@@ -1378,6 +1476,7 @@ export interface AgentFileConfig {
   workspace?: string;
   skills?: AgentSkillsConfig;
   providers?: Record<string, ProviderData>;
+  mcpServers?: Record<string, MCPServerConfig>;
 }
 
 // Fetch the raw agent.json for one agent (per-agent overrides only — not
@@ -1411,7 +1510,9 @@ export async function deleteSkill(name: string) {
 // Per-agent skills: list what's installed in an agent's own home/skills dir.
 // Agent-scoped skills shadow global ones with the same name.
 export async function getAgentSkills(agentId: string): Promise<SkillInfo[]> {
-  const res = await apiFetch(`/api/agents/${encodeURIComponent(agentId)}/skills`);
+  const res = await apiFetch(
+    `/api/agents/${encodeURIComponent(agentId)}/skills`,
+  );
   return res.json();
 }
 
@@ -1455,16 +1556,20 @@ export function userSkillAgentID(userID: string): string {
 // admin UI only wires skills.sh (primary registry). Callers that want clawhub
 // go through installSkill with source="clawhub".
 export interface SkillSearchResult {
-  id: string;       // "<owner>/<repo>/<skillId>"
-  skillId: string;  // folder name — also the slug passed to installSkill
+  id: string; // "<owner>/<repo>/<skillId>"
+  skillId: string; // folder name — also the slug passed to installSkill
   name: string;
-  source: string;   // "<owner>/<repo>"
+  source: string; // "<owner>/<repo>"
   installs: number;
 }
 
-export async function searchSkills(query: string): Promise<SkillSearchResult[]> {
+export async function searchSkills(
+  query: string,
+): Promise<SkillSearchResult[]> {
   if (!query.trim()) return [];
-  const res = await apiFetch(`/api/skills/search?source=skillssh&q=${encodeURIComponent(query)}`);
+  const res = await apiFetch(
+    `/api/skills/search?source=skillssh&q=${encodeURIComponent(query)}`,
+  );
   if (!res.ok) return [];
   const data = await res.json();
   return (data.results || []) as SkillSearchResult[];
@@ -1474,7 +1579,7 @@ export interface InstallSkillRequest {
   name: string;
   source?: "skillssh" | "clawhub" | "github" | "auto";
   repo?: string;
-  agent?: string;  // omit for global install (admin only)
+  agent?: string; // omit for global install (admin only)
 }
 
 export interface InstallSkillResponse {
@@ -1487,7 +1592,9 @@ export interface InstallSkillResponse {
   error?: string;
 }
 
-export async function installSkill(req: InstallSkillRequest): Promise<InstallSkillResponse> {
+export async function installSkill(
+  req: InstallSkillRequest,
+): Promise<InstallSkillResponse> {
   const res = await apiFetch("/api/skills/install", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1650,7 +1757,10 @@ export async function listAPIKeys(): Promise<APIKey[]> {
   return data.apikeys || [];
 }
 
-export async function createAPIKey(id: string, name: string): Promise<{ apikey: APIKey; key: string }> {
+export async function createAPIKey(
+  id: string,
+  name: string,
+): Promise<{ apikey: APIKey; key: string }> {
   const res = await apiFetch("/v1/admin/apikeys", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1658,7 +1768,8 @@ export async function createAPIKey(id: string, name: string): Promise<{ apikey: 
   });
   if (!res.ok) throw new Error(await readError(res, "create API key failed"));
   const data = await res.json();
-  if (!data.apikey || !data.key) throw new Error("malformed response from server");
+  if (!data.apikey || !data.key)
+    throw new Error("malformed response from server");
   return data;
 }
 
@@ -1668,7 +1779,9 @@ export async function deleteAPIKey(id: string): Promise<void> {
 }
 
 export async function rotateAPIKey(id: string): Promise<string> {
-  const res = await apiFetch(`/v1/admin/apikeys/${id}/rotate`, { method: "POST" });
+  const res = await apiFetch(`/v1/admin/apikeys/${id}/rotate`, {
+    method: "POST",
+  });
   if (!res.ok) throw new Error(await readError(res, "rotate API key failed"));
   const data = await res.json();
   if (!data.key) throw new Error("malformed response from server");
@@ -1688,7 +1801,10 @@ export async function listAgentBindings(): Promise<AgentBindings> {
 }
 
 // Pass apiKeyId="" to unbind (agent returns to admin-only access).
-export async function bindAgent(agentId: string, apiKeyId: string): Promise<{ ok: boolean; error?: string }> {
+export async function bindAgent(
+  agentId: string,
+  apiKeyId: string,
+): Promise<{ ok: boolean; error?: string }> {
   const res = await apiFetch(`/api/agents/${agentId}/binding`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1700,10 +1816,10 @@ export async function bindAgent(agentId: string, apiKeyId: string): Promise<{ ok
 // --- Per-agent IM channels (Telegram, ...) ---
 
 export interface AgentChannel {
-  type: string;        // "telegram"
-  accountId: string;   // bot username for Telegram
+  type: string; // "telegram"
+  accountId: string; // bot username for Telegram
   botUsername?: string;
-  botToken: string;    // server-masked
+  botToken: string; // server-masked
   enabled: boolean;
   updatedAt?: string;
 }
@@ -1716,7 +1832,7 @@ export interface AgentCronJob {
   id: string;
   agentId: string;
   name: string;
-  type: string;        // "cron" | "interval" | "once"
+  type: string; // "cron" | "interval" | "once"
   schedule: string;
   message: string;
   channel: string;
@@ -1729,7 +1845,9 @@ export interface AgentCronJob {
   createdAt: string;
 }
 
-export async function listAgentCronJobs(agentId: string): Promise<AgentCronJob[]> {
+export async function listAgentCronJobs(
+  agentId: string,
+): Promise<AgentCronJob[]> {
   const res = await apiFetch(`/api/agents/${agentId}/cron`);
   if (!res.ok) return [];
   const data = await res.json();
@@ -1814,7 +1932,9 @@ export interface AgentMCPServerInput {
   env?: Record<string, string>;
 }
 
-export async function listAgentMCPServers(agentId: string): Promise<AgentMCPServer[]> {
+export async function listAgentMCPServers(
+  agentId: string,
+): Promise<AgentMCPServer[]> {
   const res = await apiFetch(`/api/agents/${encodeURIComponent(agentId)}/mcp`);
   if (!res.ok) throw new Error(await readError(res, "load MCP servers failed"));
   const data = await res.json();
@@ -1870,11 +1990,14 @@ export async function testAgentMCPServer(
   agentId: string,
   input: AgentMCPServerInput,
 ): Promise<MCPTestResult> {
-  const res = await apiFetch(`/api/agents/${encodeURIComponent(agentId)}/mcp/test`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
-  });
+  const res = await apiFetch(
+    `/api/agents/${encodeURIComponent(agentId)}/mcp/test`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    },
+  );
   return res.json();
 }
 
@@ -1884,7 +2007,8 @@ export type MCPServerInput = AgentMCPServerInput;
 
 export async function listSystemMCPServers(): Promise<MCPServer[]> {
   const res = await apiFetch(`/api/admin/mcp`);
-  if (!res.ok) throw new Error(await readError(res, "load system MCP servers failed"));
+  if (!res.ok)
+    throw new Error(await readError(res, "load system MCP servers failed"));
   const data = await res.json();
   return data.servers || [];
 }
@@ -1921,7 +2045,9 @@ export async function deleteSystemMCPServer(
   return res.json();
 }
 
-export async function testSystemMCPServer(input: MCPServerInput): Promise<MCPTestResult> {
+export async function testSystemMCPServer(
+  input: MCPServerInput,
+): Promise<MCPTestResult> {
   const res = await apiFetch(`/api/admin/mcp/test`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1930,7 +2056,9 @@ export async function testSystemMCPServer(input: MCPServerInput): Promise<MCPTes
   return res.json();
 }
 
-export async function listAgentChannels(agentId: string): Promise<AgentChannel[]> {
+export async function listAgentChannels(
+  agentId: string,
+): Promise<AgentChannel[]> {
   const res = await apiFetch(`/api/agents/${agentId}/channels`);
   if (!res.ok) return [];
   const data = await res.json();
@@ -1952,7 +2080,12 @@ export async function connectAgentTelegram(
 export async function connectAgentDiscord(
   agentId: string,
   botToken: string,
-): Promise<{ ok: boolean; botUsername?: string; botUserId?: string; error?: string }> {
+): Promise<{
+  ok: boolean;
+  botUsername?: string;
+  botUserId?: string;
+  error?: string;
+}> {
   const res = await apiFetch(`/api/agents/${agentId}/channels/discord`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1965,7 +2098,13 @@ export async function connectAgentSlack(
   agentId: string,
   botToken: string,
   appToken: string,
-): Promise<{ ok: boolean; teamName?: string; teamId?: string; botUserId?: string; error?: string }> {
+): Promise<{
+  ok: boolean;
+  teamName?: string;
+  teamId?: string;
+  botUserId?: string;
+  error?: string;
+}> {
   const res = await apiFetch(`/api/agents/${agentId}/channels/slack`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1976,7 +2115,12 @@ export async function connectAgentSlack(
 
 export async function startAgentWeChatLogin(
   agentId: string,
-): Promise<{ sessionId?: string; qrCode?: string; qrCodeImg?: string; error?: string }> {
+): Promise<{
+  sessionId?: string;
+  qrCode?: string;
+  qrCodeImg?: string;
+  error?: string;
+}> {
   const res = await apiFetch(`/api/agents/${agentId}/channels/wechat/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -2121,7 +2265,11 @@ export async function getAgentTokenUsage(
 // cookie, so <img src>, <a href>, and direct downloads authenticate by cookie
 // like every other API call. (Putting `?token=<bearer>` in a URL leaked a full
 // API credential via Referer, browser history, and reverse-proxy access logs.)
-export function fileUrl(agentId: string, path: string, download = false): string {
+export function fileUrl(
+  agentId: string,
+  path: string,
+  download = false,
+): string {
   const encoded = path.split("/").map(encodeURIComponent).join("/");
   const params = new URLSearchParams();
   if (download) params.set("download", "1");
