@@ -106,7 +106,7 @@ func TestConfigsScopeMigration(t *testing.T) {
 		t.Errorf("bindings row not dropped: %d remain", bindCount)
 	}
 
-	// Verify each remaining row's (user_id, agent_id) pair.
+	// Verify each remaining row's (user_id, agent_id, scope_id) tuple.
 	type expect struct {
 		id          string
 		wantUser    string
@@ -118,23 +118,24 @@ func TestConfigsScopeMigration(t *testing.T) {
 		wantUser    string
 		wantAgent   string
 		wantScope   string
+		wantScopeID string
 		mustExist   bool
 	}{
-		{"cfg_sys", "", "", "system", true},
-		{"cfg_user", ownerUID, "", "user", true},
-		{"cfg_chan", "", "", "", false}, // migrated to channels table, deleted from configs
-		{"cfg_defaults", "", agentID, "agent", true},
-		{"cfg_aprov", "", agentID, "agent", true},
-		{"cfg_bindings", "", "", "", false},
+		{"cfg_sys", "", "", "system", "", true},
+		{"cfg_user", ownerUID, "", "user", ownerUID, true},
+		{"cfg_chan", "", "", "", "", false}, // migrated to channels table, deleted from configs
+		{"cfg_defaults", "", agentID, "agent", agentID, true},
+		{"cfg_aprov", "", agentID, "agent", agentID, true},
+		{"cfg_bindings", "", "", "", "", false},
 	}
 	for _, tc := range cases {
 		row := db.db.QueryRowContext(ctx,
-			`SELECT scope, user_id, agent_id FROM configs WHERE id = ?`, tc.id)
-		var scope, uid, aid string
-		err := row.Scan(&scope, &uid, &aid)
+			`SELECT scope, scope_id, user_id, agent_id FROM configs WHERE id = ?`, tc.id)
+		var scope, scopeID, uid, aid string
+		err := row.Scan(&scope, &scopeID, &uid, &aid)
 		if !tc.mustExist {
 			if err == nil {
-				t.Errorf("%s should be deleted but still exists with (scope=%q user=%q agent=%q)", tc.id, scope, uid, aid)
+				t.Errorf("%s should be deleted but still exists with (scope=%q scope_id=%q user=%q agent=%q)", tc.id, scope, scopeID, uid, aid)
 			}
 			continue
 		}
@@ -147,6 +148,9 @@ func TestConfigsScopeMigration(t *testing.T) {
 		}
 		if scope != tc.wantScope {
 			t.Errorf("%s: scope=%q; want %q", tc.id, scope, tc.wantScope)
+		}
+		if scopeID != tc.wantScopeID {
+			t.Errorf("%s: scope_id=%q; want %q", tc.id, scopeID, tc.wantScopeID)
 		}
 	}
 
@@ -180,5 +184,27 @@ func TestConfigsScopeMigration(t *testing.T) {
 	}
 	if len(listed) != 1 || listed[0].Name != "deepseek" {
 		t.Fatalf("ListConfigs returned %+v; want one 'deepseek' row", listed)
+	}
+	if listed[0].ScopeID != "u_new" {
+		t.Errorf("SaveConfig round-trip: scope_id=%q; want %q", listed[0].ScopeID, "u_new")
+	}
+
+	// Verify scope_id is correctly computed for agent-only scope.
+	agentRec := &ConfigRecord{
+		Kind:    KindProvider,
+		AgentID: agentID,
+		Name:    "claude",
+		Enabled: true,
+		Data:    map[string]interface{}{"apiKey": "sk-agent"},
+	}
+	if err := db.SaveConfig(ctx, agentRec); err != nil {
+		t.Fatalf("SaveConfig (agent scope): %v", err)
+	}
+	got, err := db.GetConfigByName(ctx, KindProvider, "", agentID, "claude")
+	if err != nil {
+		t.Fatalf("GetConfigByName (agent scope): %v", err)
+	}
+	if got.ScopeID != agentID {
+		t.Errorf("agent-scope scope_id=%q; want %q", got.ScopeID, agentID)
 	}
 }

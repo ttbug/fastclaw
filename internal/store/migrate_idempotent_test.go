@@ -43,10 +43,11 @@ func TestMigrateIdempotentOnFreshInstall(t *testing.T) {
 			t.Errorf("%s.%s present = %v; want %v", table, column, has, wantPresent)
 		}
 	}
-	// `scope` is back as a denormalized label column; `scope_id` is
-	// gone for good. user_id/agent_id are the source of truth.
+	// `scope` is a denormalized label column; `scope_id` merges
+	// user_id/agent_id into a single lookup key. Both are present
+	// alongside user_id/agent_id.
 	missing(t, "configs", "scope", true)
-	missing(t, "configs", "scope_id", false)
+	missing(t, "configs", "scope_id", true)
 	missing(t, "configs", "user_id", true)
 	missing(t, "configs", "agent_id", true)
 	missing(t, "cron_jobs", "user_id", true)
