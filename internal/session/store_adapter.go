@@ -165,6 +165,8 @@ func sessionMessageFromProvider(m provider.Message) store.SessionMessage {
 		Thinking:     m.Thinking,
 		RawAssistant: m.RawAssistant,
 		Origin:       m.Origin,
+		Provider:     m.Provider,
+		Model:        m.Model,
 	}
 	if len(m.ToolCalls) > 0 {
 		out.ToolCalls = m.ToolCalls
@@ -189,6 +191,8 @@ func providerMessageFromStored(m store.SessionMessage) provider.Message {
 		Thinking:     m.Thinking,
 		RawAssistant: m.RawAssistant,
 		Origin:       m.Origin,
+		Provider:     m.Provider,
+		Model:        m.Model,
 	}
 	if m.ToolCalls != nil {
 		if raw, err := json.Marshal(m.ToolCalls); err == nil {

@@ -476,11 +476,11 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Name              string    `json:"name,omitempty"`
-		Description       *string   `json:"description,omitempty"` // ptr so empty-string clears it
-		Model             *string   `json:"model,omitempty"`       // ptr so empty-string clears the agent-scope override
-		IsPublic          *bool     `json:"isPublic,omitempty"`    // ptr so caller can leave it unchanged
-		ShareModelConfig  *bool     `json:"shareModelConfig,omitempty"`
+		Name             string  `json:"name,omitempty"`
+		Description      *string `json:"description,omitempty"` // ptr so empty-string clears it
+		Model            *string `json:"model,omitempty"`       // ptr so empty-string clears the agent-scope override
+		IsPublic         *bool   `json:"isPublic,omitempty"`    // ptr so caller can leave it unchanged
+		ShareModelConfig *bool   `json:"shareModelConfig,omitempty"`
 		// PromptMode is a ptr so the caller can distinguish "leave
 		// unchanged" (omitted / null) from "clear override" (empty
 		// string). Allowed string values: "agent" | "chatbot" |
@@ -504,9 +504,13 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 		// are bool. Patch semantics: only the keys present in this map
 		// get written; other keys in the existing row are preserved.
 		// To clear all overrides for this agent, send pluginsReset:true.
-		Plugins           map[string]bool `json:"plugins,omitempty"`
-		PluginsReset      bool            `json:"pluginsReset,omitempty"`
-		MaxToolIterations *int            `json:"maxToolIterations,omitempty"`
+		MaxToolIterations *int `json:"maxToolIterations,omitempty"`
+		// MCPServers is a whole-map replace: omit to leave untouched,
+		// send {} to clear, or send the full desired map to replace.
+		Plugins         map[string]bool                   `json:"plugins,omitempty"`
+		PluginsReset    bool                              `json:"pluginsReset,omitempty"`
+		MCPServers      map[string]config.MCPServerConfig `json:"mcpServers,omitempty"`
+		MCPServersReset bool                              `json:"mcpServersReset,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
@@ -546,6 +550,21 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 			delete(rec.Config, "shareModelConfig")
 		} else {
 			rec.Config["shareModelConfig"] = false
+		}
+	}
+	// MCP servers: whole-map replace into the agent config blob.
+	if req.MCPServersReset {
+		if rec.Config != nil {
+			delete(rec.Config, "mcpServers")
+		}
+	} else if req.MCPServers != nil {
+		if rec.Config == nil {
+			rec.Config = map[string]interface{}{}
+		}
+		if len(req.MCPServers) == 0 {
+			delete(rec.Config, "mcpServers")
+		} else {
+			rec.Config["mcpServers"] = req.MCPServers
 		}
 	}
 	if err := s.dataStore.SaveAgent(r.Context(), rec); err != nil {
@@ -971,15 +990,15 @@ func (s *Server) handleAgentFileList(w http.ResponseWriter, r *http.Request) {
 // file browser / zip filter. acceptPath returns true for paths the
 // scope considers in-bounds:
 //
-//   loose chat:  paths under sessions/<chat_id>/
-//   project chat: paths under projects/<pid>/<chat_id>/ (the chat's
-//                 own files), PLUS files directly at projects/<pid>/
-//                 (project-root "shared/legacy" files — pre-subdir
-//                 layout still lives there, and operators may
-//                 deliberately drop shared files at the root). Other
-//                 chats' subdirs (projects/<pid>/<other-sid>/...)
-//                 are excluded — those belong to that chat's panel.
-//   no session:  everything (admin browser).
+//	loose chat:  paths under sessions/<chat_id>/
+//	project chat: paths under projects/<pid>/<chat_id>/ (the chat's
+//	              own files), PLUS files directly at projects/<pid>/
+//	              (project-root "shared/legacy" files — pre-subdir
+//	              layout still lives there, and operators may
+//	              deliberately drop shared files at the root). Other
+//	              chats' subdirs (projects/<pid>/<other-sid>/...)
+//	              are excluded — those belong to that chat's panel.
+//	no session:  everything (admin browser).
 //
 // archiveSuffix returns the human-readable scope id used in the zip
 // filename — chat_id for loose chats, "<pid>-<chat_id>" for project
