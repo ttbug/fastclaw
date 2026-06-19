@@ -436,6 +436,7 @@ type SessionOwnerPair struct {
 // SessionMeta is summary info for a session (for listing).
 type SessionMeta struct {
 	Key           string    `json:"key"`
+	UserID        string    `json:"userId,omitempty"` // session owner (may differ from the listing caller when child app_users are included)
 	Channel       string    `json:"channel,omitempty"`
 	AccountID     string    `json:"accountId,omitempty"`
 	ChatID        string    `json:"chatId,omitempty"`
