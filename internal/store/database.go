@@ -3248,6 +3248,10 @@ func (d *DBStore) SaveChannel(ctx context.Context, ch *ChannelRecord) error {
 		ch.ID = randomChannelID()
 	}
 	dataBytes, _ := json.Marshal(ch.Data)
+	sharedIdent := 0
+	if ch.SharedIdentity {
+		sharedIdent = 1
+	}
 	if d.dialect == "postgres" {
 		_, err := d.db.ExecContext(ctx,
 			`INSERT INTO channels (id, user_id, agent_id, type, account_id, enabled, bot_token, base_url, platform_user_id, shared_identity, data, created_at, updated_at)
@@ -3255,7 +3259,7 @@ func (d *DBStore) SaveChannel(ctx context.Context, ch *ChannelRecord) error {
 				ON CONFLICT (type, account_id) DO UPDATE SET
 				  user_id=$2, agent_id=$3, enabled=$6, bot_token=$7, base_url=$8,
 				  platform_user_id=$9, shared_identity=$10, data=$11, updated_at=$13`,
-			ch.ID, ch.UserID, ch.AgentID, ch.Type, ch.AccountID, ch.Enabled, ch.BotToken, ch.BaseURL, ch.PlatformUserID, ch.SharedIdentity, string(dataBytes), ch.CreatedAt, ch.UpdatedAt)
+			ch.ID, ch.UserID, ch.AgentID, ch.Type, ch.AccountID, ch.Enabled, ch.BotToken, ch.BaseURL, ch.PlatformUserID, sharedIdent, string(dataBytes), ch.CreatedAt, ch.UpdatedAt)
 		return err
 	}
 	_, err := d.db.ExecContext(ctx,
@@ -3266,7 +3270,7 @@ func (d *DBStore) SaveChannel(ctx context.Context, ch *ChannelRecord) error {
 			  bot_token=excluded.bot_token, base_url=excluded.base_url,
 			  platform_user_id=excluded.platform_user_id, shared_identity=excluded.shared_identity,
 			  data=excluded.data, updated_at=excluded.updated_at`,
-		ch.ID, ch.UserID, ch.AgentID, ch.Type, ch.AccountID, ch.Enabled, ch.BotToken, ch.BaseURL, ch.PlatformUserID, ch.SharedIdentity, string(dataBytes), ch.CreatedAt, ch.UpdatedAt)
+		ch.ID, ch.UserID, ch.AgentID, ch.Type, ch.AccountID, ch.Enabled, ch.BotToken, ch.BaseURL, ch.PlatformUserID, sharedIdent, string(dataBytes), ch.CreatedAt, ch.UpdatedAt)
 	return err
 }
 
