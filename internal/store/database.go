@@ -166,6 +166,9 @@ func (d *DBStore) Migrate(ctx context.Context) error {
 	if err := d.migrateConfigsDropLegacyColumns(ctx); err != nil {
 		return fmt.Errorf("migrate configs drop legacy columns: %w", err)
 	}
+	if err := d.migrateChannelsAddSharedIdentity(ctx); err != nil {
+		return fmt.Errorf("migrate channels shared_identity: %w", err)
+	}
 	return nil
 }
 
@@ -543,6 +546,13 @@ func (d *DBStore) migrateConfigsMergeScopeID(ctx context.Context) error {
 		return err
 	}
 	if !hasUserID {
+		// Legacy columns already dropped — backfill not needed, but
+		// ensure the index exists (migrateConfigsDropLegacyColumns
+		// normally handles it, but be defensive).
+		if _, err := d.db.ExecContext(ctx,
+			`CREATE INDEX IF NOT EXISTS idx_configs_scope ON configs (kind, scope_id)`); err != nil {
+			return fmt.Errorf("create idx_configs_scope: %w", err)
+		}
 		return nil
 	}
 	if _, err := d.db.ExecContext(ctx, `UPDATE configs SET scope_id = CASE
@@ -551,6 +561,12 @@ func (d *DBStore) migrateConfigsMergeScopeID(ctx context.Context) error {
 		ELSE ''
 	END WHERE scope_id = ''`); err != nil {
 		return fmt.Errorf("backfill scope_id: %w", err)
+	}
+	// Assert the index now that scope_id is guaranteed to exist.
+	// IF NOT EXISTS keeps it idempotent for fresh installs and re-runs.
+	if _, err := d.db.ExecContext(ctx,
+		`CREATE INDEX IF NOT EXISTS idx_configs_scope ON configs (kind, scope_id)`); err != nil {
+		return fmt.Errorf("create idx_configs_scope: %w", err)
 	}
 	return nil
 }
@@ -1605,7 +1621,9 @@ func (d *DBStore) migrationSQL() []string {
 		// don't exist yet at this point in migrationSQL). Fresh installs
 		// hit the IF NOT EXISTS path inside the migrator and still get
 		// the index.
-		`CREATE INDEX IF NOT EXISTS idx_configs_scope ON configs (kind, scope_id)`,
+		//
+		// idx_configs_scope likewise deferred to migrateConfigsMergeScopeID
+		// — on legacy databases scope_id does not exist yet at this point.
 		`CREATE TABLE IF NOT EXISTS cron_jobs (
 			id TEXT PRIMARY KEY,
 			user_id TEXT NOT NULL DEFAULT '',
@@ -1800,6 +1818,7 @@ func (d *DBStore) migrationSQL() []string {
 			bot_token TEXT NOT NULL DEFAULT '',
 			base_url TEXT NOT NULL DEFAULT '',
 			platform_user_id TEXT NOT NULL DEFAULT '',
+			shared_identity INTEGER NOT NULL DEFAULT 0,
 			data TEXT NOT NULL DEFAULT '{}',
 			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -3108,7 +3127,7 @@ func scanConfigs(rows *sql.Rows) ([]ConfigRecord, error) {
 
 // --- Channels (IM bot bindings) ---
 
-const channelSelectCols = `id, user_id, agent_id, type, account_id, enabled, bot_token, base_url, platform_user_id, data, created_at, updated_at`
+const channelSelectCols = `id, user_id, agent_id, type, account_id, enabled, bot_token, base_url, platform_user_id, shared_identity, data, created_at, updated_at`
 
 func (d *DBStore) ListChannels(ctx context.Context, userID, agentID string) ([]ChannelRecord, error) {
 	rows, err := d.db.QueryContext(ctx,
@@ -3154,23 +3173,23 @@ func (d *DBStore) SaveChannel(ctx context.Context, ch *ChannelRecord) error {
 	dataBytes, _ := json.Marshal(ch.Data)
 	if d.dialect == "postgres" {
 		_, err := d.db.ExecContext(ctx,
-			`INSERT INTO channels (id, user_id, agent_id, type, account_id, enabled, bot_token, base_url, platform_user_id, data, created_at, updated_at)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+			`INSERT INTO channels (id, user_id, agent_id, type, account_id, enabled, bot_token, base_url, platform_user_id, shared_identity, data, created_at, updated_at)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 				ON CONFLICT (type, account_id) DO UPDATE SET
 				  user_id=$2, agent_id=$3, enabled=$6, bot_token=$7, base_url=$8,
-				  platform_user_id=$9, data=$10, updated_at=$12`,
-			ch.ID, ch.UserID, ch.AgentID, ch.Type, ch.AccountID, ch.Enabled, ch.BotToken, ch.BaseURL, ch.PlatformUserID, string(dataBytes), ch.CreatedAt, ch.UpdatedAt)
+				  platform_user_id=$9, shared_identity=$10, data=$11, updated_at=$13`,
+			ch.ID, ch.UserID, ch.AgentID, ch.Type, ch.AccountID, ch.Enabled, ch.BotToken, ch.BaseURL, ch.PlatformUserID, ch.SharedIdentity, string(dataBytes), ch.CreatedAt, ch.UpdatedAt)
 		return err
 	}
 	_, err := d.db.ExecContext(ctx,
-		`INSERT INTO channels (id, user_id, agent_id, type, account_id, enabled, bot_token, base_url, platform_user_id, data, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO channels (id, user_id, agent_id, type, account_id, enabled, bot_token, base_url, platform_user_id, shared_identity, data, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT (type, account_id) DO UPDATE SET
 			  user_id=excluded.user_id, agent_id=excluded.agent_id, enabled=excluded.enabled,
 			  bot_token=excluded.bot_token, base_url=excluded.base_url,
-			  platform_user_id=excluded.platform_user_id, data=excluded.data,
-			  updated_at=excluded.updated_at`,
-		ch.ID, ch.UserID, ch.AgentID, ch.Type, ch.AccountID, ch.Enabled, ch.BotToken, ch.BaseURL, ch.PlatformUserID, string(dataBytes), ch.CreatedAt, ch.UpdatedAt)
+			  platform_user_id=excluded.platform_user_id, shared_identity=excluded.shared_identity,
+			  data=excluded.data, updated_at=excluded.updated_at`,
+		ch.ID, ch.UserID, ch.AgentID, ch.Type, ch.AccountID, ch.Enabled, ch.BotToken, ch.BaseURL, ch.PlatformUserID, ch.SharedIdentity, string(dataBytes), ch.CreatedAt, ch.UpdatedAt)
 	return err
 }
 
@@ -3203,7 +3222,7 @@ func randomChannelID() string {
 func scanChannelRow(row rowScanner) (*ChannelRecord, error) {
 	var c ChannelRecord
 	var dataStr string
-	if err := row.Scan(&c.ID, &c.UserID, &c.AgentID, &c.Type, &c.AccountID, &c.Enabled, &c.BotToken, &c.BaseURL, &c.PlatformUserID, &dataStr, &c.CreatedAt, &c.UpdatedAt); err != nil {
+	if err := row.Scan(&c.ID, &c.UserID, &c.AgentID, &c.Type, &c.AccountID, &c.Enabled, &c.BotToken, &c.BaseURL, &c.PlatformUserID, &c.SharedIdentity, &dataStr, &c.CreatedAt, &c.UpdatedAt); err != nil {
 		return nil, scanErr(err)
 	}
 	json.Unmarshal([]byte(dataStr), &c.Data)
@@ -3215,7 +3234,7 @@ func scanChannels(rows *sql.Rows) ([]ChannelRecord, error) {
 	for rows.Next() {
 		var c ChannelRecord
 		var dataStr string
-		if err := rows.Scan(&c.ID, &c.UserID, &c.AgentID, &c.Type, &c.AccountID, &c.Enabled, &c.BotToken, &c.BaseURL, &c.PlatformUserID, &dataStr, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.UserID, &c.AgentID, &c.Type, &c.AccountID, &c.Enabled, &c.BotToken, &c.BaseURL, &c.PlatformUserID, &c.SharedIdentity, &dataStr, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, err
 		}
 		json.Unmarshal([]byte(dataStr), &c.Data)
@@ -3408,6 +3427,24 @@ func (d *DBStore) migrateConfigsDropLegacyColumns(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// migrateChannelsAddSharedIdentity retrofits a shared_identity column
+// onto the channels table. Default 0 (off) — each platform sender gets
+// an isolated chatter. When set to 1, inbound messages use the channel
+// owner's user_id as chatter so sessions and memory are shared across
+// the owner's personal channels.
+func (d *DBStore) migrateChannelsAddSharedIdentity(ctx context.Context) error {
+	has, err := d.tableHasColumn(ctx, "channels", "shared_identity")
+	if err != nil {
+		return err
+	}
+	if has {
+		return nil
+	}
+	_, err = d.db.ExecContext(ctx,
+		`ALTER TABLE channels ADD COLUMN shared_identity INTEGER NOT NULL DEFAULT 0`)
+	return err
 }
 
 // --- Cron jobs ---
