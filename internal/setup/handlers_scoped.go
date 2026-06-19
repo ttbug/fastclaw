@@ -397,32 +397,29 @@ func (s *Server) handleCreateScopedChannel(w http.ResponseWriter, r *http.Reques
 		BotToken: req.BotToken,
 		AppToken: req.AppToken,
 	}
-	if err := scope.SaveChannelByScope(r.Context(), s.dataStore, sc, scopeID, req.Type, credKey, req.Enabled, cc); err != nil {
+	// Write to the channels table (sole authoritative store).
+	chUID, chAID := scope.OwnershipFromScope(sc, scopeID)
+	ch := &store.ChannelRecord{
+		UserID:    chUID,
+		AgentID:   chAID,
+		Type:      req.Type,
+		AccountID: credKey,
+		Enabled:   req.Enabled,
+		BotToken:  cc.BotToken,
+	}
+	chData, _ := json.Marshal(cc)
+	var dm map[string]interface{}
+	_ = json.Unmarshal(chData, &dm)
+	delete(dm, "enabled")
+	ch.Data = dm
+	if err := s.dataStore.SaveChannel(r.Context(), ch); err != nil {
 		jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
-	// Dual-write to the channels table.
-	{
-		chUID, chAID := scope.OwnershipFromScope(sc, scopeID)
-		ch := &store.ChannelRecord{
-			UserID:    chUID,
-			AgentID:   chAID,
-			Type:      req.Type,
-			AccountID: credKey,
-			Enabled:   req.Enabled,
-			BotToken:  cc.BotToken,
-		}
-		chData, _ := json.Marshal(cc)
-		var dm map[string]interface{}
-		_ = json.Unmarshal(chData, &dm)
-		delete(dm, "enabled")
-		ch.Data = dm
-		_ = s.dataStore.SaveChannel(r.Context(), ch)
-	}
 	s.invalidateScope(sc, scopeID)
 	if req.Enabled {
-		if rec, _ := s.dataStore.LookupChannelByCredential(r.Context(), req.Type, credKey); rec != nil {
-			s.hotRegisterChannel(*rec)
+		if looked, _ := s.dataStore.LookupChannel(r.Context(), req.Type, credKey); looked != nil {
+			s.hotRegisterChannelRecord(*looked)
 		}
 	}
 	jsonResponse(w, http.StatusOK, map[string]any{"ok": true})
@@ -464,31 +461,28 @@ func (s *Server) handleUpdateScopedChannel(w http.ResponseWriter, r *http.Reques
 			return
 		}
 	}
-	if err := scope.SaveChannelByScope(r.Context(), s.dataStore, rec.LegacyScope(), rec.LegacyScopeID(), rec.Name, credKey, enabled, cc); err != nil {
+	// Write to the channels table (sole authoritative store).
+	ch := &store.ChannelRecord{
+		UserID:    rec.UserID,
+		AgentID:   rec.AgentID,
+		Type:      rec.Name,
+		AccountID: credKey,
+		Enabled:   enabled,
+		BotToken:  cc.BotToken,
+	}
+	chData, _ := json.Marshal(cc)
+	var dm map[string]interface{}
+	_ = json.Unmarshal(chData, &dm)
+	delete(dm, "enabled")
+	ch.Data = dm
+	if err := s.dataStore.SaveChannel(r.Context(), ch); err != nil {
 		jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
-	// Dual-write to the channels table.
-	{
-		ch := &store.ChannelRecord{
-			UserID:    rec.UserID,
-			AgentID:   rec.AgentID,
-			Type:      rec.Name,
-			AccountID: credKey,
-			Enabled:   enabled,
-			BotToken:  cc.BotToken,
-		}
-		chData, _ := json.Marshal(cc)
-		var dm map[string]interface{}
-		_ = json.Unmarshal(chData, &dm)
-		delete(dm, "enabled")
-		ch.Data = dm
-		_ = s.dataStore.SaveChannel(r.Context(), ch)
-	}
 	s.invalidateScope(rec.LegacyScope(), rec.LegacyScopeID())
 	if enabled {
-		if updated, _ := s.dataStore.LookupChannelByCredential(r.Context(), rec.Name, credKey); updated != nil {
-			s.hotRegisterChannel(*updated)
+		if updated, _ := s.dataStore.LookupChannel(r.Context(), rec.Name, credKey); updated != nil {
+			s.hotRegisterChannelRecord(*updated)
 		}
 	}
 	jsonResponse(w, http.StatusOK, map[string]any{"ok": true})
@@ -507,25 +501,27 @@ func (s *Server) handleDeleteScopedChannel(w http.ResponseWriter, r *http.Reques
 	if !s.authorizeScope(w, r, rec.LegacyScope(), rec.LegacyScopeID(), scopeWrite) {
 		return
 	}
-	if err := s.dataStore.DeleteConfig(r.Context(), id); err != nil {
-		jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
-		return
-	}
+	// Best-effort: also delete from configs table for backward compat.
+	_ = s.dataStore.DeleteConfig(r.Context(), id)
+
 	s.invalidateScope(rec.LegacyScope(), rec.LegacyScopeID())
-	// Best-effort: stop the bot adapter from receiving outbound routes.
-	// We don't know its accountID without decoding rec, so derive from
-	// the row we just looked up (rec is still valid here).
+	// Delete from the channels table (authoritative) and hot-unregister.
 	cc := decodeChannelConfigFromRecord(rec)
 	for accountID := range cc.Accounts {
-		// Also clean up the channels table.
 		if ch, err := s.dataStore.LookupChannel(r.Context(), rec.Name, accountID); err == nil && ch != nil {
-			_ = s.dataStore.DeleteChannel(r.Context(), ch.ID)
+			if err := s.dataStore.DeleteChannel(r.Context(), ch.ID); err != nil {
+				jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+				return
+			}
 		}
 		s.hotUnregisterChannel(rec.Name, accountID)
 	}
 	if len(cc.Accounts) == 0 {
 		if ch, err := s.dataStore.LookupChannel(r.Context(), rec.Name, rec.CredentialKey); err == nil && ch != nil {
-			_ = s.dataStore.DeleteChannel(r.Context(), ch.ID)
+			if err := s.dataStore.DeleteChannel(r.Context(), ch.ID); err != nil {
+				jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+				return
+			}
 		}
 		s.hotUnregisterChannel(rec.Name, "")
 	}
