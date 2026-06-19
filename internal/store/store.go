@@ -435,14 +435,15 @@ type SessionOwnerPair struct {
 
 // SessionMeta is summary info for a session (for listing).
 type SessionMeta struct {
-	Key          string    `json:"key"`
-	Channel      string    `json:"channel,omitempty"`
-	AccountID    string    `json:"accountId,omitempty"`
-	ChatID       string    `json:"chatId,omitempty"`
-	ProjectID    string    `json:"projectId,omitempty"`
-	Title        string    `json:"title,omitempty"`
-	MessageCount int       `json:"messageCount"`
-	UpdatedAt    time.Time `json:"updatedAt"`
+	Key           string    `json:"key"`
+	Channel       string    `json:"channel,omitempty"`
+	AccountID     string    `json:"accountId,omitempty"`
+	ChatID        string    `json:"chatId,omitempty"`
+	ProjectID     string    `json:"projectId,omitempty"`
+	Title         string    `json:"title,omitempty"`
+	MessageCount  int       `json:"messageCount"`
+	UpdatedAt     time.Time `json:"updatedAt"`
+	ChatterUserID string    `json:"chatterUserId,omitempty"`
 }
 
 // ProjectRecord is a per-(user, agent) named workspace folder. Sessions
