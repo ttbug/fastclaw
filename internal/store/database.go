@@ -160,14 +160,14 @@ func (d *DBStore) Migrate(ctx context.Context) error {
 	if err := d.migrateConfigsMergeScopeID(ctx); err != nil {
 		return fmt.Errorf("migrate configs scope_id: %w", err)
 	}
+	if err := d.migrateChannelsAddSharedIdentity(ctx); err != nil {
+		return fmt.Errorf("migrate channels shared_identity: %w", err)
+	}
 	if err := d.migrateChannelsFromConfigs(ctx); err != nil {
 		return fmt.Errorf("migrate channels from configs: %w", err)
 	}
 	if err := d.migrateConfigsDropLegacyColumns(ctx); err != nil {
 		return fmt.Errorf("migrate configs drop legacy columns: %w", err)
-	}
-	if err := d.migrateChannelsAddSharedIdentity(ctx); err != nil {
-		return fmt.Errorf("migrate channels shared_identity: %w", err)
 	}
 	return nil
 }

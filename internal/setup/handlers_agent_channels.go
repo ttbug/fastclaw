@@ -15,7 +15,6 @@ import (
 	"github.com/fastclaw-ai/fastclaw/internal/auth"
 	"github.com/fastclaw-ai/fastclaw/internal/channels"
 	"github.com/fastclaw-ai/fastclaw/internal/config"
-	"github.com/fastclaw-ai/fastclaw/internal/scope"
 	"github.com/fastclaw-ai/fastclaw/internal/store"
 )
 
@@ -134,27 +133,13 @@ func (s *Server) handleListAgentChannels(w http.ResponseWriter, r *http.Request)
 	// Try the new channels table first. If it has rows for this agent,
 	// use them exclusively; otherwise fall back to the configs table.
 	out := make([]channelOut, 0)
-	hasNewRows := false
 	if caller != "" {
 		if chRows, err := s.dataStore.ListChannels(r.Context(), caller, id); err == nil && len(chRows) > 0 {
-			hasNewRows = true
 			out = append(out, flattenChannelRecords(chRows, "agent")...)
 		}
 	}
 	if chRows, err := s.dataStore.ListChannels(r.Context(), "", id); err == nil && len(chRows) > 0 {
-		hasNewRows = true
 		out = append(out, flattenChannelRecords(chRows, "agent")...)
-	}
-	if !hasNewRows {
-		// Fallback: read from configs for pre-migration installs.
-		if caller != "" {
-			if rows, err := s.dataStore.ListConfigs(r.Context(), store.KindChannel, caller, id); err == nil {
-				out = append(out, flattenChannelRows(rows, "agent", "", "")...)
-			}
-		}
-		if rows, err := s.dataStore.ListConfigs(r.Context(), store.KindChannel, "", id); err == nil {
-			out = append(out, flattenChannelRows(rows, "agent", "", "")...)
-		}
 	}
 	jsonResponse(w, http.StatusOK, map[string]any{"channels": out})
 }
@@ -308,11 +293,10 @@ func (s *Server) handleConnectAgentTelegram(w http.ResponseWriter, r *http.Reque
 		jsonResponse(w, http.StatusConflict, map[string]any{"error": err.Error()})
 		return
 	}
-	if err := scope.SaveChannel(r.Context(), s.dataStore, uid, aid, "telegram", credKey, true, cc); err != nil {
+	if err := s.saveChannelRecord(r.Context(), uid, aid, "telegram", username, true, cc); err != nil {
 		jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
-	s.saveChannelRecord(r.Context(), uid, aid, "telegram", username, true, cc)
 
 	// Append a binding so inbound messages route to this agent. Existing
 	// bindings (e.g. an earlier Discord bot) are preserved. AgentID
@@ -330,8 +314,6 @@ func (s *Server) handleConnectAgentTelegram(w http.ResponseWriter, r *http.Reque
 	s.invalidateOwner(uid, aid)
 	if ch, err := s.dataStore.LookupChannel(r.Context(), "telegram", username); err == nil && ch != nil {
 		s.hotRegisterChannelRecord(*ch)
-	} else if rec, _ := s.dataStore.LookupChannelByCredential(r.Context(), "telegram", credKey); rec != nil {
-		s.hotRegisterChannel(*rec)
 	}
 	jsonResponse(w, http.StatusOK, map[string]any{
 		"ok":          true,
@@ -405,47 +387,25 @@ func (s *Server) handleDisconnectAgentChannel(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Locate the channel row at the resolved scope (agent for owner /
-	// admin, user for non-owner overlay). Match by accountID inside the
-	// row's Accounts map.
-	rows, err := s.dataStore.ListConfigs(r.Context(), store.KindChannel, uid, aid)
+	// Locate the channel row from the channels table.
+	chRows, err := s.dataStore.ListChannels(r.Context(), uid, aid)
 	if err != nil {
 		jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
-	for _, rec := range rows {
-		if rec.Name != channelType {
+	for _, ch := range chRows {
+		if ch.Type != channelType || ch.AccountID != accountID {
 			continue
 		}
-		cc := decodeChannelConfigFromRecord(&rec)
-		_, hasAcct := cc.Accounts[accountID]
-		// When the row has no Accounts map, treat it as the legacy
-		// single-bot shape; accountID must be empty to match.
-		if !hasAcct && !(len(cc.Accounts) == 0 && accountID == "") {
-			continue
-		}
-		if hasAcct {
-			delete(cc.Accounts, accountID)
-		}
-		// If nothing left, drop the row; otherwise rewrite it.
-		if len(cc.Accounts) == 0 && (cc.BotToken == "" || hasAcct) {
-			if err := s.dataStore.DeleteConfig(r.Context(), rec.ID); err != nil {
-				jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
-				return
-			}
-		} else {
-			if err := scope.SaveChannelByScope(r.Context(), s.dataStore, rec.LegacyScope(), rec.LegacyScopeID(), rec.Name, rec.CredentialKey, rec.Enabled, cc); err != nil {
-				jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
-				return
-			}
+		if err := s.dataStore.DeleteChannel(r.Context(), ch.ID); err != nil {
+			jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
 		}
 		// Drop the matching binding too.
 		if err := s.removeBinding(r, "", "", id, channelType, accountID); err != nil {
 			jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 			return
 		}
-		// Also remove from the channels table.
-		s.deleteChannelRecord(r.Context(), channelType, accountID)
 		s.invalidateOwner(uid, aid)
 		s.hotUnregisterChannel(channelType, accountID)
 		jsonResponse(w, http.StatusOK, map[string]any{"ok": true})
@@ -566,11 +526,10 @@ func (s *Server) handleConnectAgentDiscord(w http.ResponseWriter, r *http.Reques
 		jsonResponse(w, http.StatusConflict, map[string]any{"error": err.Error()})
 		return
 	}
-	if err := scope.SaveChannel(r.Context(), s.dataStore, uid, aid, "discord", credKey, true, cc); err != nil {
+	if err := s.saveChannelRecord(r.Context(), uid, aid, "discord", userID, true, cc); err != nil {
 		jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
-	s.saveChannelRecord(r.Context(), uid, aid, "discord", userID, true, cc)
 	if err := s.appendBinding(r, "", "", config.Binding{
 		AgentID: id,
 		Match:   config.Match{Channel: "discord", AccountID: userID},
@@ -581,8 +540,6 @@ func (s *Server) handleConnectAgentDiscord(w http.ResponseWriter, r *http.Reques
 	s.invalidateOwner(uid, aid)
 	if ch, err := s.dataStore.LookupChannel(r.Context(), "discord", userID); err == nil && ch != nil {
 		s.hotRegisterChannelRecord(*ch)
-	} else if rec, _ := s.dataStore.LookupChannelByCredential(r.Context(), "discord", credKey); rec != nil {
-		s.hotRegisterChannel(*rec)
 	}
 	jsonResponse(w, http.StatusOK, map[string]any{
 		"ok":          true,
@@ -705,11 +662,10 @@ func (s *Server) handleConnectAgentSlack(w http.ResponseWriter, r *http.Request)
 		jsonResponse(w, http.StatusConflict, map[string]any{"error": err.Error()})
 		return
 	}
-	if err := scope.SaveChannel(r.Context(), s.dataStore, uid, aid, "slack", credKey, true, cc); err != nil {
+	if err := s.saveChannelRecord(r.Context(), uid, aid, "slack", teamID, true, cc); err != nil {
 		jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
-	s.saveChannelRecord(r.Context(), uid, aid, "slack", teamID, true, cc)
 	if err := s.appendBinding(r, "", "", config.Binding{
 		AgentID: id,
 		Match:   config.Match{Channel: "slack", AccountID: teamID},
@@ -720,8 +676,6 @@ func (s *Server) handleConnectAgentSlack(w http.ResponseWriter, r *http.Request)
 	s.invalidateOwner(uid, aid)
 	if ch, err := s.dataStore.LookupChannel(r.Context(), "slack", teamID); err == nil && ch != nil {
 		s.hotRegisterChannelRecord(*ch)
-	} else if rec, _ := s.dataStore.LookupChannelByCredential(r.Context(), "slack", credKey); rec != nil {
-		s.hotRegisterChannel(*rec)
 	}
 	jsonResponse(w, http.StatusOK, map[string]any{
 		"ok":        true,
@@ -989,10 +943,9 @@ func (s *Server) persistWeChatAccount(r *http.Request, userID, agentIDArg, agent
 	if err := s.assertChannelCredentialUniqueOpt(r, "wechat", credKey, "", userID, agentIDArg, true); err != nil {
 		return err
 	}
-	if err := scope.SaveChannel(r.Context(), s.dataStore, userID, agentIDArg, "wechat", credKey, true, cc); err != nil {
+	if err := s.saveChannelRecord(r.Context(), userID, agentIDArg, "wechat", creds.ILinkBotID, true, cc); err != nil {
 		return err
 	}
-	s.saveChannelRecord(r.Context(), userID, agentIDArg, "wechat", creds.ILinkBotID, true, cc)
 	if err := s.appendBinding(r, "", "", config.Binding{
 		AgentID: agentID,
 		Match:   config.Match{Channel: "wechat", AccountID: creds.ILinkBotID},
@@ -1002,8 +955,6 @@ func (s *Server) persistWeChatAccount(r *http.Request, userID, agentIDArg, agent
 	s.invalidateOwner(userID, agentIDArg)
 	if ch, err := s.dataStore.LookupChannel(r.Context(), "wechat", creds.ILinkBotID); err == nil && ch != nil {
 		s.hotRegisterChannelRecord(*ch)
-	} else if rec, _ := s.dataStore.LookupChannelByCredential(r.Context(), "wechat", credKey); rec != nil {
-		s.hotRegisterChannel(*rec)
 	}
 	return nil
 }
@@ -1156,11 +1107,10 @@ func (s *Server) handleConnectAgentFeishu(w http.ResponseWriter, r *http.Request
 		jsonResponse(w, http.StatusConflict, map[string]any{"error": err.Error()})
 		return
 	}
-	if err := scope.SaveChannel(r.Context(), s.dataStore, uid, aid, "feishu", credKey, true, cc); err != nil {
+	if err := s.saveChannelRecord(r.Context(), uid, aid, "feishu", appID, true, cc); err != nil {
 		jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
-	s.saveChannelRecord(r.Context(), uid, aid, "feishu", appID, true, cc)
 	if err := s.appendBinding(r, "", "", config.Binding{
 		AgentID: id,
 		Match:   config.Match{Channel: "feishu", AccountID: appID},
@@ -1171,8 +1121,6 @@ func (s *Server) handleConnectAgentFeishu(w http.ResponseWriter, r *http.Request
 	s.invalidateOwner(uid, aid)
 	if ch, err := s.dataStore.LookupChannel(r.Context(), "feishu", credKey); err == nil && ch != nil {
 		s.hotRegisterChannelRecord(*ch)
-	} else if rec, _ := s.dataStore.LookupChannelByCredential(r.Context(), "feishu", credKey); rec != nil {
-		s.hotRegisterChannel(*rec)
 	}
 	resp := map[string]any{
 		"ok":          true,
@@ -1271,11 +1219,10 @@ func (s *Server) handleConnectAgentLINE(w http.ResponseWriter, r *http.Request) 
 		jsonResponse(w, http.StatusConflict, map[string]any{"error": err.Error()})
 		return
 	}
-	if err := scope.SaveChannel(r.Context(), s.dataStore, uid, aid, "line", credKey, true, cc); err != nil {
+	if err := s.saveChannelRecord(r.Context(), uid, aid, "line", userID, true, cc); err != nil {
 		jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
-	s.saveChannelRecord(r.Context(), uid, aid, "line", userID, true, cc)
 	if err := s.appendBinding(r, "", "", config.Binding{
 		AgentID: id,
 		Match:   config.Match{Channel: "line", AccountID: userID},
@@ -1286,8 +1233,6 @@ func (s *Server) handleConnectAgentLINE(w http.ResponseWriter, r *http.Request) 
 	s.invalidateOwner(uid, aid)
 	if ch, err := s.dataStore.LookupChannel(r.Context(), "line", credKey); err == nil && ch != nil {
 		s.hotRegisterChannelRecord(*ch)
-	} else if rec, _ := s.dataStore.LookupChannelByCredential(r.Context(), "line", credKey); rec != nil {
-		s.hotRegisterChannel(*rec)
 	}
 	jsonResponse(w, http.StatusOK, map[string]any{
 		"ok":          true,
@@ -1317,14 +1262,11 @@ func lineWebhookPathFor(r *http.Request, userID string) string {
 	return scheme + "://" + host + "/api/line/webhook/" + userID
 }
 
-// saveChannelRecord writes a ChannelRecord to the channels table alongside
-// the existing configs row. This dual-write approach keeps backward
-// compatibility during the migration: configs rows are still written by
-// scope.SaveChannel above; this writes the new-table row so the new read
-// paths (registerChannelsFromStore, resolveChannelOwner, etc.) find it.
-func (s *Server) saveChannelRecord(ctx context.Context, userID, agentID, channelType, accountID string, enabled bool, cc config.ChannelConfig) {
+// saveChannelRecord writes a ChannelRecord to the channels table.
+// The channels table is the sole authoritative store for channel data.
+func (s *Server) saveChannelRecord(ctx context.Context, userID, agentID, channelType, accountID string, enabled bool, cc config.ChannelConfig) error {
 	if s.dataStore == nil {
-		return
+		return nil
 	}
 	data := channelConfigToData(cc)
 	ch := &store.ChannelRecord{
@@ -1345,9 +1287,11 @@ func (s *Server) saveChannelRecord(ctx context.Context, userID, agentID, channel
 		ch.PlatformUserID = acct.UserID
 	}
 	if err := s.dataStore.SaveChannel(ctx, ch); err != nil {
-		slog.Warn("saveChannelRecord failed (non-fatal, configs row is authoritative)",
+		slog.Error("saveChannelRecord failed",
 			"type", channelType, "account", accountID, "error", err)
+		return fmt.Errorf("save channel record: %w", err)
 	}
+	return nil
 }
 
 // channelConfigToData converts a ChannelConfig to a JSON data map,
