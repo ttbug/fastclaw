@@ -29,7 +29,6 @@ import AgentPluginsPage from "@/app/agents/[id]/plugins/page";
 import AgentMCPPage from "@/app/agents/[id]/mcp/page";
 import AgentChannelsPage from "@/app/agents/[id]/channels/page";
 import AgentSchedulerPage from "@/app/agents/[id]/scheduler/page";
-import AgentMCPPage from "@/app/agents/[id]/mcp/page";
 import AgentUsagePage from "@/app/agents/[id]/usage/page";
 import AccountSettingsPage from "@/app/settings/account/page";
 import GeneralSettingsPage from "@/app/settings/general/page";
@@ -44,7 +43,6 @@ export type AgentSettingsTab =
   | "skills"
   | "mcp"
   | "plugins"
-  | "mcp"
   | "channels"
   | "scheduler"
   | "usage"
