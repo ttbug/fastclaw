@@ -60,7 +60,6 @@ const AGENT_TABS: Array<{ id: AgentSettingsTab; label: string; icon: TabIcon }> 
   { id: "skills", label: "Skills", icon: SparklesIcon },
   { id: "mcp", label: "MCP", icon: ServerIcon },
   { id: "plugins", label: "Plugins", icon: Plug },
-  { id: "mcp", label: "MCP", icon: ServerIcon },
   { id: "channels", label: "Channels", icon: RadioIcon },
   { id: "scheduler", label: "Scheduler", icon: ClockIcon },
   { id: "usage", label: "Token Usage", icon: CoinsIcon },
@@ -176,7 +175,6 @@ export function AgentSettingsDialog({
           {tab === "skills" && <AgentSkillsPage />}
           {tab === "mcp" && <AgentMCPPage />}
           {tab === "plugins" && <AgentPluginsPage />}
-          {tab === "mcp" && <AgentMCPPage />}
           {tab === "channels" && <AgentChannelsPage />}
           {tab === "scheduler" && <AgentSchedulerPage />}
           {tab === "usage" && <AgentUsagePage />}
